@@ -1,7 +1,7 @@
 {
   "name": "watermark-remover",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Hapus watermark AI video (visible + invisible + metadata) memakai GPU lokal",
   "main": "electron/main.js",
   "scripts": {

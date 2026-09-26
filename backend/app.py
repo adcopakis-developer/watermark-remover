@@ -38,6 +38,13 @@ MARKS = ("auto", "sora", "veo", "seedance", "doubao", "dola", "hailuo", "kling")
 
 app = FastAPI(title="watermark-remover")
 
+APP_VERSION = "1.1.0"
+
+
+@app.get("/api/meta")
+def meta():
+    return {"version": APP_VERSION, "has_setup": True}
+
 
 def now_wib() -> str:
     return datetime.now(WIB).isoformat(timespec="seconds")

@@ -9,6 +9,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, exp)).toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`
 }
 
+function isBinaryError(text: string | null): boolean {
+  return !!text && /binary/i.test(text)
+}
+
 function formatBatchName(name: string): string {
   const m = name.match(/^bulk_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/)
   if (!m) return name
@@ -25,6 +29,8 @@ export default function App() {
   const [busyBatch, setBusyBatch] = useState<string | null>(null)
   const [openReport, setOpenReport] = useState<string | null>(null)
   const [gpu, setGpu] = useState<string | null>(null)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  const [hasSetup, setHasSetup] = useState(true)
   const [setupReady, setSetupReady] = useState<boolean | null>(null)
   const [setupLog, setSetupLog] = useState('')
   const [setupDismissed, setSetupDismissed] = useState(false)
@@ -45,6 +51,16 @@ export default function App() {
 
   useEffect(() => {
     void refresh()
+    void api
+      .meta()
+      .then((m) => {
+        setAppVersion(m.version)
+        setHasSetup(m.has_setup)
+      })
+      .catch(() => {
+        // Backend lama tanpa /api/meta (dmg sebelum auto-install).
+        setHasSetup(false)
+      })
     void api
       .gpu()
       .then((g) => setGpu(g.cuda ? `GPU aktif: ${g.detail}` : `GPU tidak terdeteksi (${g.detail})`))
@@ -208,7 +224,15 @@ export default function App() {
         </div>
       )}
       <div className="card">
-        <h1>Watermark Remover</h1>
+        <h1>
+          Watermark Remover{appVersion ? <span className="ver"> v{appVersion}</span> : ''}
+        </h1>
+        {!hasSetup && (
+          <div className="warnbox">
+            Backend versi lama terdeteksi (tanpa auto-install). Install ulang DMG terbaru,
+            lalu pakai tombol Install Library di bawah bila error binary muncul.
+          </div>
+        )}
         <div className="muted">
           Drop banyak video sekaligus → 1 tombol hapus semua watermark (visible + invisible +
           metadata) memakai GPU lokal. Hasil tiap bulk masuk folder baru sesuai tanggal-jam upload.
@@ -258,7 +282,16 @@ export default function App() {
         </div>
       </div>
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error">
+          <div>{error}</div>
+          {isBinaryError(error) && hasSetup && (
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button onClick={() => void handleInstall()}>Install Library Otomatis</button>
+            </div>
+          )}
+        </div>
+      )}
       {loading && <div className="card muted">Memuat daftar...</div>}
       {!loading && batches.length === 0 && (
         <div className="card muted">Belum ada video. Drop file di atas.</div>
@@ -305,6 +338,13 @@ export default function App() {
                         {formatBytes(r.src_bytes)} — {r.status}
                       </div>
                       {r.error && <div style={{ color: '#f87171', marginTop: 6 }}>{r.error}</div>}
+                      {isBinaryError(r.error) && hasSetup && (
+                        <div className="actions">
+                          <button onClick={() => void handleInstall()}>
+                            Install Library Otomatis
+                          </button>
+                        </div>
+                      )}
                       <div className="actions">
                         <button className="ghost" disabled={vbusy} onClick={() => void handleIdentify(r.id)}>
                           Cek Sinyal

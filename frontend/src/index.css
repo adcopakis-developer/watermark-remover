@@ -28,6 +28,22 @@ h1 {
   font-size: 24px;
 }
 
+.ver {
+  font-size: 13px;
+  color: #9aa1b2;
+  font-weight: 400;
+}
+
+.warnbox {
+  background: #3a2c10;
+  border: 1px solid #8a6d1c;
+  color: #fcd34d;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+
 .muted {
   color: #9aa1b2;
   font-size: 13px;

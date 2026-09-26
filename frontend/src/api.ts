@@ -56,6 +56,7 @@ export interface SetupStatus {
 }
 
 export const api = {
+  meta: () => req<{ version: string; has_setup: boolean }>('/api/meta'),
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
   setup: () => req<SetupStatus>('/api/setup/status'),
   install: () =>
