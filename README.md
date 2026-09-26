@@ -23,17 +23,23 @@ REM terminal 3 — electron (setelah 2 di atas jalan)
 set ELEC_DEV=1 && npx electron .
 ```
 
-## Build installer Windows (di mesin Windows GPU)
+## Build installer Windows (di mesin Windows GPU, sekali jalan)
 
 ```bat
-pip install pyinstaller "remove-ai-watermarks[video,diffusion]"
-pyinstaller packaging\watermark-server.spec
-xcopy dist\watermark-server backend-dist\ /E /I
-npm run dist:win
+git clone https://github.com/adcopakis-developer/watermark-remover.git
+cd watermark-remover
+scripts\build-win.bat
 ```
 
-Hasil: installer NSIS x64 di `release/`. Electron mem-spawn
-`backend-dist/watermark-server.exe` otomatis; storage di userData.
+Script mengerjakan: venv + `remove-ai-watermarks[video,diffusion]` +
+PyInstaller (`packaging/`) → copy ke `backend-dist/` → `npm run dist:win`.
+Hasil: installer NSIS x64 di `release/`. Klik dua kali untuk install,
+buka "Watermark Remover" dari Start Menu (backend ikut nyala otomatis,
+storage di `%APPDATA%\Watermark Remover\storage`).
+
+Catatan: Windows SmartScreen mungkin memberi peringatan (app tanpa
+code-sign) → pilih install anyway. Badge GPU di halaman utama harus
+bertuliskan aktif; jika tidak, cek driver NVIDIA/CUDA.
 
 ## API backend
 

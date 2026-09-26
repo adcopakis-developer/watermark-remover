@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Build di MESIN WINDOWS bergPU:
-#   pip install pyinstaller "remove-ai-watermarks[video,diffusion]"
-#   pyinstaller watermark-server.spec
-# Hasil: dist/watermark-server/watermark-server.exe -> copy ke backend-dist/
-# (onedir agar model/hook torch ikut; jangan --onefile untuk app GPU besar).
+# Build di MESIN WINDOWS bergPU, dari folder packaging/:
+#   cd packaging && pyinstaller watermark-server.spec
+# Hasil: packaging/dist/watermark-server/ -> copy ke ..\backend-dist\
+# (onedir agar hook torch ikut; jangan --onefile untuk app GPU besar).
+# Atau sekali jalan dari root: scripts\build-win.bat
 
 block_cipher = None
 
