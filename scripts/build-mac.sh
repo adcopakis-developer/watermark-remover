@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "[1/4] Backend venv + deps..."
-if [ ! -d backend/.venv ]; then uv venv backend/.venv; fi
+if [ ! -d backend/.venv ]; then uv venv --seed backend/.venv; fi
 uv pip install --python backend/.venv/bin/python -q -r backend/requirements.txt
 uv pip install --python backend/.venv/bin/python -q pyinstaller
 # Opsional (CPU test): uv pip install --python backend/.venv/bin/python "remove-ai-watermarks[video]"

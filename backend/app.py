@@ -13,7 +13,10 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -112,22 +115,151 @@ async def gpu_status():
     return info
 
 
-async def run_cli(args: list[str], timeout: int = 3600) -> dict:
-    binary = RAIW_BIN
-    if binary == "remove-ai-watermarks" and not shutil.which(binary):
-        # Cari di venv yang sama dengan interpreter ini (dev & PyInstaller).
-        import sys
+SETUP_LOG = STORAGE / "_setup.log"
+_setup = {"installing": False}
 
-        suffix = ".exe" if os.name == "nt" else ""
-        candidate = Path(sys.executable).parent / f"remove-ai-watermarks{suffix}"
-        if candidate.exists():
-            binary = str(candidate)
+
+def user_site_bins() -> list[str]:
+    """Lokasi binary pip --user per OS."""
+    vers = f"{sys.version_info.major}.{sys.version_info.minor}"
+    cands = [str(Path.home() / ".local" / "bin")]
+    if sys.platform == "darwin":
+        cands.append(str(Path.home() / "Library" / "Python" / vers / "bin"))
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            cands.append(str(Path(appdata) / "Python" / f"Python{sys.version_info.major}{sys.version_info.minor}" / "Scripts"))
+    return cands
+
+
+def resolve_cli() -> Optional[str]:
+    """Cari binary remove-ai-watermarks: env, venv, user-site, PATH."""
+    suffix = ".exe" if os.name == "nt" else ""
+    name = f"remove-ai-watermarks{suffix}"
+    cands = []
+    if RAIW_BIN != "remove-ai-watermarks":
+        cands.append(RAIW_BIN)
+    cands.append(str(Path(sys.executable).parent / name))
+    cands.extend(str(Path(d) / name) for d in user_site_bins())
+    found = shutil.which(name)
+    if found:
+        cands.append(found)
+    for c in cands:
+        if c and Path(c).exists():
+            return c
+    return None
+
+
+def ffmpeg_exe_dir() -> Optional[str]:
+    """Dir ffmpeg: PATH dulu, lalu binary bawaan imageio-ffmpeg."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return str(Path(found).parent)
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
+        if exe.exists():
+            return str(exe.parent)
+    except Exception:
+        pass
+    return None
+
+
+def pip_candidates() -> list[list[str]]:
+    """Base command pip yang valid: venv dulu, lalu sistem."""
+    ok: list[list[str]] = []
+    for base in ([sys.executable, "-m", "pip"], ["python3", "-m", "pip"], ["pip3"]):
+        try:
+            subprocess.run(base + ["--version"], capture_output=True, timeout=30, check=True)
+            ok.append(base)
+        except Exception:
+            pass
+    return ok
+
+
+def setup_append_log(text: str) -> None:
+    try:
+        STORAGE.mkdir(parents=True, exist_ok=True)
+        with open(SETUP_LOG, "a") as f:
+            f.write(f"[{now_wib()}] {text}\n")
+    except Exception:
+        pass
+
+
+@app.get("/api/setup/status")
+def setup_status():
+    cli = resolve_cli()
+    ffmpeg = ffmpeg_exe_dir() is not None
+    log = ""
+    try:
+        if SETUP_LOG.exists():
+            log = "\n".join(SETUP_LOG.read_text().splitlines()[-30:])
+    except Exception:
+        pass
+    return {
+        "ready": bool(cli and ffmpeg),
+        "cli": cli,
+        "ffmpeg": ffmpeg,
+        "installing": _setup["installing"],
+        "log": log,
+    }
+
+
+async def do_install() -> None:
+    _setup["installing"] = True
+    try:
+        STORAGE.mkdir(parents=True, exist_ok=True)
+        if SETUP_LOG.exists():
+            SETUP_LOG.unlink()
+        cands = await asyncio.to_thread(pip_candidates)
+        if not cands:
+            setup_append_log("ERROR: pip tidak ditemukan (coba install python3 + pip).")
+            return
+        extra = "remove-ai-watermarks[video,diffusion]" if sys.platform == "win32" else "remove-ai-watermarks[video]"
+        cmd = cands[0] + ["install", "--user", extra, "imageio-ffmpeg"]
+        setup_append_log("RUN: " + " ".join(cmd))
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            setup_append_log(raw.decode(errors="replace").rstrip()[-500:])
+        await proc.wait()
+        if proc.returncode == 0:
+            setup_append_log(f"OK: instalasi selesai. CLI: {resolve_cli()}")
+        else:
+            setup_append_log(f"ERROR: pip exit={proc.returncode}")
+    except Exception as e:  # noqa: BLE001
+        setup_append_log(f"ERROR: {e}")
+    finally:
+        _setup["installing"] = False
+
+
+@app.post("/api/setup/install")
+async def setup_install(bg: BackgroundTasks):
+    if _setup["installing"]:
+        return {"installing": True}
+    st = setup_status()
+    if st["ready"]:
+        return {"installing": False, "ready": True}
+    bg.add_task(do_install)
+    _setup["installing"] = True
+    return {"installing": True}
+    binary = resolve_cli() or RAIW_BIN
+    env = None
+    ffmpeg_dir = ffmpeg_exe_dir()
+    if ffmpeg_dir:
+        env = {**os.environ, "PATH": f"{ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
     try:
         proc = await asyncio.create_subprocess_exec(
             binary,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
     except FileNotFoundError:
         return {"code": 127, "stdout": "", "stderr": "binary tidak ditemukan", "timed_out": False}

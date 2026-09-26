@@ -25,6 +25,9 @@ export default function App() {
   const [busyBatch, setBusyBatch] = useState<string | null>(null)
   const [openReport, setOpenReport] = useState<string | null>(null)
   const [gpu, setGpu] = useState<string | null>(null)
+  const [setupReady, setSetupReady] = useState<boolean | null>(null)
+  const [setupLog, setSetupLog] = useState('')
+  const [setupDismissed, setSetupDismissed] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -46,7 +49,40 @@ export default function App() {
       .gpu()
       .then((g) => setGpu(g.cuda ? `GPU aktif: ${g.detail}` : `GPU tidak terdeteksi (${g.detail})`))
       .catch(() => setGpu('Status GPU tidak diketahui'))
+    void api
+      .setup()
+      .then((s) => {
+        setSetupReady(s.ready)
+        setSetupLog(s.log)
+      })
+      .catch(() => setSetupReady(true))
   }, [refresh])
+
+  useEffect(() => {
+    if (setupReady !== false) return
+    const t = window.setInterval(() => {
+      void api
+        .setup()
+        .then((s) => {
+          setSetupReady(s.ready)
+          setSetupLog(s.log)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => window.clearInterval(t)
+  }, [setupReady])
+
+  const handleInstall = useCallback(async () => {
+    setError(null)
+    try {
+      await api.install()
+      const s = await api.setup()
+      setSetupReady(s.ready)
+      setSetupLog(s.log)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal memulai instalasi')
+    }
+  }, [])
 
   const anyProcessing = batches.some((b) => b.videos.some((v) => v.status === 'processing'))
 
@@ -152,6 +188,25 @@ export default function App() {
 
   return (
     <div className="wrap">
+      {setupReady === false && !setupDismissed && (
+        <div className="modal-backdrop">
+          <div className="card modal">
+            <h2>Library pendukung belum terinstall</h2>
+            <p className="muted">
+              Untuk menghapus watermark, app perlu menginstall otomatis
+              <code>remove-ai-watermarks</code> + <code>ffmpeg</code> (sekali saja,
+              ±500MB–2GB tergantung GPU). Setuju install sekarang?
+            </p>
+            <div className="actions">
+              <button onClick={() => void handleInstall()}>Ya, Install Otomatis</button>
+              <button className="ghost" onClick={() => setSetupDismissed(true)}>
+                Nanti Saja
+              </button>
+            </div>
+            {setupLog && <pre>{setupLog}</pre>}
+          </div>
+        </div>
+      )}
       <div className="card">
         <h1>Watermark Remover</h1>
         <div className="muted">

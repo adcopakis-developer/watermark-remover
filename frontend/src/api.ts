@@ -47,8 +47,19 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T
 }
 
+export interface SetupStatus {
+  ready: boolean
+  cli: string | null
+  ffmpeg: boolean
+  installing: boolean
+  log: string
+}
+
 export const api = {
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
+  setup: () => req<SetupStatus>('/api/setup/status'),
+  install: () =>
+    req<{ installing: boolean; ready?: boolean }>('/api/setup/install', { method: 'POST' }),
   batches: () => req<{ data: VwBatch[] }>('/api/batches').then((r) => r.data),
 
   uploadBatch: (files: File[], onProgress?: (pct: number) => void): Promise<VwBatch> => {

@@ -138,6 +138,34 @@ button.danger {
   margin-bottom: 0;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+
+.card.modal {
+  max-width: 520px;
+  margin-bottom: 0;
+}
+
+.card.modal h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.card.modal code {
+  font-family: monospace;
+  background: #0f1115;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr;
