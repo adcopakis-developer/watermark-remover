@@ -8,7 +8,8 @@
     "dev:be": "uvicorn app:app --app-dir backend --host 127.0.0.1 --port 8000",
     "dev:fe": "npm run dev --prefix frontend",
     "dev:electron": "cross-env ELEC_DEV=1 electron .",
-    "dist:win": "npm run build --prefix frontend && electron-builder --win nsis x64"
+    "dist:win": "npm run build --prefix frontend && electron-builder --win nsis --x64",
+    "dist:mac": "npm run build --prefix frontend && electron-builder --mac dmg --arm64"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -30,8 +31,12 @@
       }
     ],
     "win": {
-      "target": ["nsis"],
-      "arch": ["x64"]
+      "target": ["nsis"]
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.video",
+      "identity": null
     },
     "nsis": {
       "oneClick": false,

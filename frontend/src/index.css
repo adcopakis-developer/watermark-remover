@@ -96,6 +96,48 @@ button.danger {
   margin-bottom: 16px;
 }
 
+.dropzone {
+  margin-top: 16px;
+  border: 2px dashed #2a2f3a;
+  border-radius: 12px;
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: #9aa1b2;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.dropzone:hover {
+  border-color: #2563eb;
+  background: #141824;
+}
+
+.batch-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.batch-head h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.batch-head code {
+  font-family: monospace;
+  background: #0f1115;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.card.inner {
+  margin-bottom: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr;

@@ -7,8 +7,9 @@
 
 block_cipher = None
 
+# Path portable: dijalankan dari folder packaging/ (mac & windows).
 a = Analysis(
-    ['..\\backend\\app.py'],
+    ['../backend/app.py'],
     pathex=[],
     binaries=[],
     datas=[],

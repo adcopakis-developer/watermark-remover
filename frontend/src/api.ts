@@ -7,6 +7,8 @@ export interface VwRecord {
   id: string
   src_file: string
   src_bytes: number
+  batch_id: string | null
+  batch_name: string | null
   out_file: string | null
   mode: VwMode | null
   mark: VwMark | null
@@ -15,6 +17,13 @@ export interface VwRecord {
   error: string | null
   created_at: string
   updated_at: string
+}
+
+export interface VwBatch {
+  batch_id: string
+  batch_name: string
+  created_at: string
+  videos: VwRecord[]
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -35,20 +44,18 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
-  list: () => req<{ data: VwRecord[] }>('/api/videos').then((r) => r.data),
-  upload: async (file: File, onProgress?: (pct: number) => void) => {
+  batches: () => req<{ data: VwBatch[] }>('/api/batches').then((r) => r.data),
+
+  uploadBatch: (files: File[], onProgress?: (pct: number) => void): Promise<VwBatch> => {
     const form = new FormData()
-    form.append('file', file)
-    if (!onProgress) {
-      return req<{ data: VwRecord }>('/api/videos/upload', { method: 'POST', body: form }).then(
-        (r) => r.data,
-      )
-    }
-    return new Promise<VwRecord>((resolve, reject) => {
+    for (const f of files) form.append('files', f)
+    return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', '/api/videos/upload')
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && e.total > 0) onProgress(Math.round((e.loaded / e.total) * 100))
+      xhr.open('POST', '/api/batches/upload')
+      if (onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && e.total > 0) onProgress(Math.round((e.loaded / e.total) * 100))
+        }
       }
       xhr.onload = () => {
         if (xhr.status < 200 || xhr.status >= 300) {
@@ -63,7 +70,8 @@ export const api = {
           return
         }
         try {
-          resolve((JSON.parse(xhr.responseText) as { data: VwRecord }).data)
+          const b = (JSON.parse(xhr.responseText) as { data: VwBatch }).data
+          resolve(b)
         } catch (err) {
           reject(err instanceof Error ? err : new Error('Respon tidak valid'))
         }
@@ -72,6 +80,7 @@ export const api = {
       xhr.send(form)
     })
   },
+
   identify: (id: string) =>
     req<{ data: VwRecord }>(`/api/videos/${id}/identify`, { method: 'POST' }).then((r) => r.data),
   clean: (id: string) =>
@@ -80,8 +89,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     }).then((r) => r.data),
-  remove: (id: string) =>
-    req<{ ok: boolean }>(`/api/videos/${id}`, { method: 'DELETE' }),
+  cleanAll: (batchId: string) =>
+    req<{ data: { batch_id: string; queued: number } }>(`/api/batches/${batchId}/clean-all`, {
+      method: 'POST',
+    }),
+  remove: (id: string) => req<{ ok: boolean }>(`/api/videos/${id}`, { method: 'DELETE' }),
+  removeBatch: (batchId: string) =>
+    req<{ ok: boolean }>(`/api/batches/${batchId}`, { method: 'DELETE' }),
   downloadUrl: (id: string, kind: 'clean' | 'src' = 'clean') =>
     `/api/videos/${id}/download?kind=${kind}`,
 }

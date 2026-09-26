@@ -60,6 +60,18 @@ def find_rec(rows: list, vid: str) -> Optional[dict]:
     return next((r for r in rows if r["id"] == vid), None)
 
 
+def batch_stamp() -> str:
+    return datetime.now(WIB).strftime("bulk_%Y%m%d_%H%M%S")
+
+
+def safe_join(name: str) -> Path:
+    """Resolve path di dalam STORAGE (cegah traversal)."""
+    p = (STORAGE / name).resolve()
+    if p != STORAGE.resolve() and STORAGE.resolve() not in p.parents:
+        raise HTTPException(400, "Path tidak valid")
+    return p
+
+
 class CleanBody(BaseModel):
     # Diabaikan: Electron selalu full-clean (visible + invisible + metadata)
     # memakai GPU lokal. Field dijaga agar request lama tetap valid.
@@ -101,9 +113,18 @@ async def gpu_status():
 
 
 async def run_cli(args: list[str], timeout: int = 3600) -> dict:
+    binary = RAIW_BIN
+    if binary == "remove-ai-watermarks" and not shutil.which(binary):
+        # Cari di venv yang sama dengan interpreter ini (dev & PyInstaller).
+        import sys
+
+        suffix = ".exe" if os.name == "nt" else ""
+        candidate = Path(sys.executable).parent / f"remove-ai-watermarks{suffix}"
+        if candidate.exists():
+            binary = str(candidate)
     try:
         proc = await asyncio.create_subprocess_exec(
-            RAIW_BIN,
+            binary,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -157,6 +178,8 @@ async def upload_video(file: UploadFile = File(...)):
         "id": vid,
         "src_file": dest.name,
         "src_bytes": size,
+        "batch_id": None,
+        "batch_name": None,
         "out_file": None,
         "mode": None,
         "mark": None,
@@ -170,6 +193,75 @@ async def upload_video(file: UploadFile = File(...)):
     rows.append(rec)
     save_store(rows)
     return {"data": rec}
+
+
+@app.post("/api/batches/upload")
+async def upload_batch(files: list[UploadFile] = File(...)):
+    """Upload bulk: semua file masuk 1 grup batch + 1 folder hasil datetime."""
+    if not files:
+        raise HTTPException(400, "Tidak ada file.")
+    if len(files) > 50:
+        raise HTTPException(400, "Maksimal 50 file per bulk.")
+    STORAGE.mkdir(parents=True, exist_ok=True)
+    stamp = batch_stamp()
+    batch_id = stamp
+    rows = load_store()
+    n = 1
+    while any(r.get("batch_id") == batch_id for r in rows):
+        n += 1
+        batch_id = f"{stamp}_{n}"
+    videos = []
+    for file in files:
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in ALLOWED_EXT:
+            raise HTTPException(400, f"Ekstensi {ext or '?'} tidak didukung: {file.filename}")
+        vid = uuid.uuid4().hex[:12]
+        dest = STORAGE / f"{vid}_src{ext}"
+        size = 0
+        with dest.open("wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_BYTES:
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(400, f"Melebihi 500MB: {file.filename}")
+                f.write(chunk)
+        rec = {
+            "id": vid,
+            "src_file": dest.name,
+            "src_bytes": size,
+            "batch_id": batch_id,
+            "batch_name": batch_id,
+            "out_file": None,
+            "mode": None,
+            "mark": None,
+            "status": "uploaded",
+            "report": None,
+            "error": None,
+            "created_at": now_wib(),
+            "updated_at": now_wib(),
+        }
+        rows.append(rec)
+        videos.append(rec)
+    save_store(rows)
+    return {"data": {"batch_id": batch_id, "batch_name": batch_id, "videos": videos}}
+
+
+@app.get("/api/batches")
+def list_batches():
+    groups: dict[str, dict] = {}
+    order: list[str] = []
+    for r in sorted(load_store(), key=lambda x: x["created_at"]):
+        bid = r.get("batch_id") or f"single_{r['id']}"
+        if bid not in groups:
+            groups[bid] = {
+                "batch_id": bid,
+                "batch_name": r.get("batch_name") or "Upload satuan",
+                "created_at": r["created_at"],
+                "videos": [],
+            }
+            order.append(bid)
+        groups[bid]["videos"].append(r)
+    return {"data": [groups[bid] for bid in reversed(order)]}
 
 
 @app.post("/api/videos/{vid}/identify")
@@ -213,6 +305,12 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
         ext = Path(rec["src_file"]).suffix.lower() or ".mp4"
         out = workdir / f"clean{ext}"
         res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
+        note = ""
+        err_low = (res["stderr"] or "").lower()
+        if res["code"] != 0 and ("cuda" in err_low or "diffusion" in err_low):
+            # Mesin tanpa CUDA/extra diffusion: fallback CPU (visible + metadata).
+            res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
+            note = " [fallback CPU: tanpa invisible]"
         rows = load_store()
         rec = find_rec(rows, vid)
         if not rec:
@@ -221,16 +319,20 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
             rec.update(
                 status="failed",
                 error=(res["stderr"] or res["stdout"])[-500:] or "Gagal memproses",
-                report=f"[{mode}] exit={res['code']}\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
+                report=f"[{mode}]{note} exit={res['code']}\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
                 updated_at=now_wib(),
             )
         else:
-            out_name = f"{vid}_clean{ext}"
+            # Hasil masuk folder grup bulk (datetime) bila ada, bila tidak flat.
+            folder = rec.get("batch_name") or ""
+            out_dir = STORAGE / folder if folder else STORAGE
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_name = f"{folder}/{vid}_clean{ext}" if folder else f"{vid}_clean{ext}"
             shutil.copy(out, STORAGE / out_name)
             rec.update(
                 status="done",
                 out_file=out_name,
-                report=f"[{mode}] exit=0\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
+                report=f"[{mode}]{note} exit=0\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
                 error=None,
                 updated_at=now_wib(),
             )
@@ -260,6 +362,57 @@ async def clean_video(vid: str, body: CleanBody, bg: BackgroundTasks):
     return {"data": rec}
 
 
+async def run_batch_clean(batch_id: str) -> None:
+    """Bersihkan semua video grup yang belum done, berurutan."""
+    rows = load_store()
+    vids = [r["id"] for r in rows
+            if r.get("batch_id") == batch_id and r.get("status") != "processing"]
+    for vid in vids:
+        rows = load_store()
+        rec = find_rec(rows, vid)
+        if not rec or rec.get("status") == "done":
+            continue
+        rec.update(mode="all", mark="auto", status="processing",
+                   error=None, report="Diproses full-clean (GPU)...", updated_at=now_wib())
+        save_store(rows)
+        await run_clean(vid, "all", "auto")
+
+
+@app.post("/api/batches/{batch_id}/clean-all")
+async def clean_batch(batch_id: str, bg: BackgroundTasks):
+    rows = load_store()
+    vids = [r for r in rows if r.get("batch_id") == batch_id]
+    if not vids:
+        raise HTTPException(404, "Batch tidak ditemukan")
+    if any(r.get("status") == "processing" for r in vids):
+        raise HTTPException(400, "Batch masih diproses, tunggu selesai.")
+    bg.add_task(run_batch_clean, batch_id)
+    return {"data": {"batch_id": batch_id, "queued": len(vids)}}
+
+
+@app.delete("/api/batches/{batch_id}")
+def delete_batch(batch_id: str):
+    rows = load_store()
+    vids = [r for r in rows if r.get("batch_id") == batch_id]
+    if not vids:
+        raise HTTPException(404, "Batch tidak ditemukan")
+    for rec in vids:
+        for name in (rec["src_file"], rec.get("out_file") or ""):
+            if name:
+                try:
+                    safe_join(name).unlink(missing_ok=True)
+                except HTTPException:
+                    pass
+    folder = vids[0].get("batch_name") or ""
+    if folder:
+        try:
+            safe_join(folder).rmdir()
+        except OSError:
+            pass
+    save_store([r for r in rows if r.get("batch_id") != batch_id])
+    return {"ok": True}
+
+
 @app.get("/api/videos/{vid}/download")
 def download_video(vid: str, kind: str = "clean"):
     rec = find_rec(load_store(), vid)
@@ -268,10 +421,10 @@ def download_video(vid: str, kind: str = "clean"):
     name = rec["out_file"] if kind == "clean" else rec["src_file"]
     if kind == "clean" and not name:
         raise HTTPException(404, "Belum ada hasil.")
-    path = STORAGE / name
+    path = safe_join(name)
     if not path.exists():
         raise HTTPException(404, "File tidak ada di storage.")
-    return FileResponse(path, filename=name)
+    return FileResponse(path, filename=Path(name).name)
 
 
 @app.delete("/api/videos/{vid}")
@@ -282,7 +435,10 @@ def delete_video(vid: str):
         raise HTTPException(404, "Video tidak ditemukan")
     for name in (rec["src_file"], rec.get("out_file") or ""):
         if name:
-            (STORAGE / name).unlink(missing_ok=True)
+            try:
+                safe_join(name).unlink(missing_ok=True)
+            except HTTPException:
+                pass
     save_store([r for r in rows if r["id"] != vid])
     return {"ok": True}
 
