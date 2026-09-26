@@ -1,0 +1,41 @@
+{
+  "name": "watermark-remover",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Hapus watermark AI video (visible + invisible + metadata) memakai GPU lokal",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev:be": "uvicorn app:app --app-dir backend --host 127.0.0.1 --port 8000",
+    "dev:fe": "npm run dev --prefix frontend",
+    "dev:electron": "cross-env ELEC_DEV=1 electron .",
+    "dist:win": "npm run build --prefix frontend && electron-builder --win nsis x64"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^36.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "id.aerostreet.watermarkremover",
+    "productName": "Watermark Remover",
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist/",
+        "to": "backend-dist/",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "arch": ["x64"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
