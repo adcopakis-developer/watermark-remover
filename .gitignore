@@ -8,3 +8,5 @@ backend-dist/
 storage/
 *.log
 .DS_Store
+packaging/build/
+packaging/dist/
