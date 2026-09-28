@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -85,6 +85,12 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  ipcMain.handle('select-folder', async () => {
+    const res = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return res.canceled ? null : res.filePaths[0] || null;
+  });
   await startBackend();
   if (!isDev) {
     const ok = await waitBackendReady();

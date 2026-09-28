@@ -29,6 +29,7 @@ from pydantic import BaseModel
 RAIW_BIN = os.environ.get("RAIW_BIN", "").strip() or "remove-ai-watermarks"
 STORAGE = Path(os.environ.get("STORAGE_DIR", "./storage")).resolve()
 STORE_FILE = STORAGE / "_store.json"
+SETTINGS_FILE = STORAGE / "_settings.json"
 WIB = timezone(timedelta(hours=7))
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"}
@@ -80,6 +81,67 @@ def safe_join(name: str) -> Path:
     if p != STORAGE.resolve() and STORAGE.resolve() not in p.parents:
         raise HTTPException(400, "Path tidak valid")
     return p
+
+
+def default_output_root() -> str:
+    vids = Path.home() / "Videos" / "WatermarkRemover"
+    try:
+        vids.mkdir(parents=True, exist_ok=True)
+        return str(vids)
+    except Exception:
+        fallback = Path("./output").resolve()
+        fallback.mkdir(parents=True, exist_ok=True)
+        return str(fallback)
+
+
+def load_settings() -> dict:
+    try:
+        if SETTINGS_FILE.exists():
+            data = json.loads(SETTINGS_FILE.read_text())
+            if isinstance(data, dict) and data.get("output_root"):
+                return data
+    except Exception:
+        pass
+    return {"output_root": default_output_root()}
+
+
+def save_settings(data: dict) -> None:
+    STORAGE.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(SETTINGS_FILE)
+
+
+def sanitize_stem(name: str) -> str:
+    stem = Path(name or "video").stem
+    clean = "".join(c if (c.isalnum() or c in ("-", "_", " ")) else "_" for c in stem).strip()
+    return clean or "video"
+
+
+class SettingsBody(BaseModel):
+    output_root: str
+
+
+@app.get("/api/settings")
+def get_settings():
+    return load_settings()
+
+
+@app.put("/api/settings")
+def put_settings(body: SettingsBody):
+    root = Path(body.output_root).expanduser()
+    if not root.is_absolute():
+        raise HTTPException(400, "Folder harus path absolut.")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".write-test"
+        probe.write_text("ok")
+        probe.unlink()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"Folder tidak bisa ditulis: {e}")
+    data = {"output_root": str(root)}
+    save_settings(data)
+    return data
 
 
 class CleanBody(BaseModel):
@@ -419,10 +481,12 @@ async def upload_video(file: UploadFile = File(...)):
     rec = {
         "id": vid,
         "src_file": dest.name,
+        "orig_name": file.filename or dest.name,
         "src_bytes": size,
         "batch_id": None,
         "batch_name": None,
         "out_file": None,
+        "out_folder": None,
         "mode": None,
         "mark": None,
         "status": "uploaded",
@@ -470,10 +534,12 @@ async def upload_batch(files: list[UploadFile] = File(...)):
         rec = {
             "id": vid,
             "src_file": dest.name,
+            "orig_name": file.filename or dest.name,
             "src_bytes": size,
             "batch_id": batch_id,
             "batch_name": batch_id,
             "out_file": None,
+            "out_folder": None,
             "mode": None,
             "mark": None,
             "status": "uploaded",
@@ -565,15 +631,25 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
                 updated_at=now_wib(),
             )
         else:
-            # Hasil masuk folder grup bulk (datetime) bila ada, bila tidak flat.
-            folder = rec.get("batch_name") or ""
-            out_dir = STORAGE / folder if folder else STORAGE
+            # Hasil: {output_root}/{folder-datetime}/{nama}_removedfull{ext}.
+            # Folder grup bulk = batch_name; upload satuan = stamp baru.
+            settings = load_settings()
+            root = Path(settings["output_root"])
+            root.mkdir(parents=True, exist_ok=True)
+            folder = rec.get("batch_name") or batch_stamp()
+            out_dir = root / folder
             out_dir.mkdir(parents=True, exist_ok=True)
-            out_name = f"{folder}/{vid}_clean{ext}" if folder else f"{vid}_clean{ext}"
-            shutil.copy(out, STORAGE / out_name)
+            stem = sanitize_stem(rec.get("orig_name") or rec["src_file"])
+            dest = out_dir / f"{stem}_removedfull{ext}"
+            n = 1
+            while dest.exists():
+                n += 1
+                dest = out_dir / f"{stem}_removedfull_{n}{ext}"
+            shutil.copy(out, dest)
             rec.update(
                 status="done",
-                out_file=out_name,
+                out_file=str(dest),
+                out_folder=str(out_dir),
                 report=f"[{mode}]{note} exit=0\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
                 error=None,
                 updated_at=now_wib(),
@@ -632,6 +708,14 @@ async def clean_batch(batch_id: str, bg: BackgroundTasks):
     return {"data": {"batch_id": batch_id, "queued": len(vids)}}
 
 
+def resolve_out(name: str) -> Path:
+    """out_file boleh absolut (folder hasil pilihan user) atau relatif lama."""
+    p = Path(name)
+    if p.is_absolute():
+        return p
+    return safe_join(name)
+
+
 @app.delete("/api/batches/{batch_id}")
 def delete_batch(batch_id: str):
     rows = load_store()
@@ -639,18 +723,16 @@ def delete_batch(batch_id: str):
     if not vids:
         raise HTTPException(404, "Batch tidak ditemukan")
     for rec in vids:
-        for name in (rec["src_file"], rec.get("out_file") or ""):
-            if name:
-                try:
-                    safe_join(name).unlink(missing_ok=True)
-                except HTTPException:
-                    pass
-    folder = vids[0].get("batch_name") or ""
-    if folder:
-        try:
-            safe_join(folder).rmdir()
-        except OSError:
-            pass
+        if rec.get("src_file"):
+            try:
+                safe_join(rec["src_file"]).unlink(missing_ok=True)
+            except HTTPException:
+                pass
+        if rec.get("out_file"):
+            try:
+                resolve_out(rec["out_file"]).unlink(missing_ok=True)
+            except HTTPException:
+                pass
     save_store([r for r in rows if r.get("batch_id") != batch_id])
     return {"ok": True}
 
@@ -663,7 +745,7 @@ def download_video(vid: str, kind: str = "clean"):
     name = rec["out_file"] if kind == "clean" else rec["src_file"]
     if kind == "clean" and not name:
         raise HTTPException(404, "Belum ada hasil.")
-    path = safe_join(name)
+    path = resolve_out(name) if kind == "clean" else safe_join(name)
     if not path.exists():
         raise HTTPException(404, "File tidak ada di storage.")
     return FileResponse(path, filename=Path(name).name)
@@ -675,12 +757,16 @@ def delete_video(vid: str):
     rec = find_rec(rows, vid)
     if not rec:
         raise HTTPException(404, "Video tidak ditemukan")
-    for name in (rec["src_file"], rec.get("out_file") or ""):
-        if name:
-            try:
-                safe_join(name).unlink(missing_ok=True)
-            except HTTPException:
-                pass
+    if rec.get("src_file"):
+        try:
+            safe_join(rec["src_file"]).unlink(missing_ok=True)
+        except HTTPException:
+            pass
+    if rec.get("out_file"):
+        try:
+            resolve_out(rec["out_file"]).unlink(missing_ok=True)
+        except HTTPException:
+            pass
     save_store([r for r in rows if r["id"] != vid])
     return {"ok": True}
 

@@ -29,6 +29,8 @@ export default function App() {
   const [busyBatch, setBusyBatch] = useState<string | null>(null)
   const [openReport, setOpenReport] = useState<string | null>(null)
   const [gpu, setGpu] = useState<string | null>(null)
+  const [outputRoot, setOutputRoot] = useState('')
+  const [outputDraft, setOutputDraft] = useState('')
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [hasSetup, setHasSetup] = useState(true)
   const [setupItems, setSetupItems] = useState<SetupItem[]>([])
@@ -72,6 +74,13 @@ export default function App() {
         setSetupLog(s.log)
       })
       .catch(() => setSetupItems([]))
+    void api
+      .settings()
+      .then((s) => {
+        setOutputRoot(s.output_root)
+        setOutputDraft(s.output_root)
+      })
+      .catch(() => {})
   }, [refresh])
 
   const setupBusy = setupItems.some((i) => i.installing)
@@ -90,6 +99,31 @@ export default function App() {
     }, 3000)
     return () => window.clearInterval(t)
   }, [setupItems, setupBusy])
+
+  const handleSaveOutputRoot = useCallback(async () => {
+    const v = outputDraft.trim()
+    if (!v) {
+      setError('Folder hasil tidak boleh kosong')
+      return
+    }
+    setError(null)
+    try {
+      const s = await api.saveSettings(v)
+      setOutputRoot(s.output_root)
+      setOutputDraft(s.output_root)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal menyimpan folder')
+    }
+  }, [outputDraft])
+
+  const handlePickFolder = useCallback(async () => {
+    try {
+      const picked = await window.watermarkApp?.selectFolder?.()
+      if (picked) setOutputDraft(picked)
+    } catch {
+      /* abaikan */
+    }
+  }, [])
 
   const handleInstallKey = useCallback(async (key: string) => {
     setError(null)
@@ -246,6 +280,32 @@ export default function App() {
         {setupLogOpen && setupLog && <pre>{setupLog}</pre>}
       </div>
       <div className="card">
+        <h2>Folder Hasil</h2>
+        <div className="muted">
+          Root folder untuk semua hasil. Tiap proses otomatis membuat subfolder
+          tanggal-jam di dalamnya berisi file <code>*_removedfull.mp4</code>.
+        </div>
+        <div className="row">
+          <label className="field" style={{ flex: 1 }}>
+            Root folder
+            <input
+              type="text"
+              value={outputDraft}
+              onChange={(e) => setOutputDraft(e.target.value)}
+              placeholder="/Users/nama/Videos/WatermarkRemover"
+              style={{ width: '100%' }}
+            />
+          </label>
+          {window.watermarkApp?.selectFolder && (
+            <button className="ghost" onClick={() => void handlePickFolder()}>
+              Pilih...
+            </button>
+          )}
+          <button onClick={() => void handleSaveOutputRoot()}>Simpan</button>
+        </div>
+        {outputRoot && <div className="muted">Aktif: {outputRoot}</div>}
+      </div>
+      <div className="card">
         <h1>
           Watermark Remover{appVersion ? <span className="ver"> v{appVersion}</span> : ''}
         </h1>
@@ -328,7 +388,8 @@ export default function App() {
               <div>
                 <h2>{formatBatchName(b.batch_name)}</h2>
                 <div className="muted">
-                  Folder hasil: <code>{b.batch_name}/</code> — {done}/{b.videos.length} selesai
+                  Folder hasil: <code>{outputRoot ? `${outputRoot}/${b.batch_name}/` : `${b.batch_name}/`}</code> —{' '}
+                  {done}/{b.videos.length} selesai
                 </div>
               </div>
               <div className="actions" style={{ marginTop: 0 }}>
@@ -372,7 +433,7 @@ export default function App() {
                           Cek Sinyal
                         </button>
                         {r.out_file && (
-                          <a href={api.downloadUrl(r.id, 'clean')} download={r.out_file.split('/').pop()}>
+                          <a href={api.downloadUrl(r.id, 'clean')} download={r.out_file.split(/[\\/]/).pop()}>
                             <button className="ghost">Download Hasil</button>
                           </a>
                         )}

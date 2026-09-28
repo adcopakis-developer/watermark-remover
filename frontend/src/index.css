@@ -72,6 +72,16 @@ button {
   padding: 8px 14px;
 }
 
+input[type='text'] {
+  font-size: 13px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #0f1115;
+  color: #e8eaf0;
+  border: 1px solid #2a2f3a;
+  font-family: monospace;
+}
+
 select {
   background: #0f1115;
   color: #e8eaf0;

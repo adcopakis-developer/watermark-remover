@@ -1,4 +1,10 @@
 export type VwMode = 'visible' | 'metadata' | 'all' | 'invisible'
+
+declare global {
+  interface Window {
+    watermarkApp?: { version: string; platform: string; selectFolder?: () => Promise<string | null> }
+  }
+}
 export type VwMark =
   | 'auto' | 'sora' | 'veo' | 'seedance' | 'doubao' | 'dola' | 'hailuo' | 'kling'
 export type VwStatus = 'uploaded' | 'processing' | 'done' | 'failed'
@@ -64,6 +70,13 @@ export interface SetupStatus {
 }
 
 export const api = {
+  settings: () => req<{ output_root: string }>('/api/settings'),
+  saveSettings: (output_root: string) =>
+    req<{ output_root: string }>('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ output_root }),
+    }),
   meta: () => req<{ version: string; has_setup: boolean }>('/api/meta'),
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
   setup: () => req<SetupStatus>('/api/setup/status'),
