@@ -29,6 +29,7 @@ export default function App() {
   const [busyBatch, setBusyBatch] = useState<string | null>(null)
   const [openReport, setOpenReport] = useState<string | null>(null)
   const [gpu, setGpu] = useState<string | null>(null)
+  const [gpuOk, setGpuOk] = useState<boolean | null>(null)
   const [outputRoot, setOutputRoot] = useState('')
   const [outputDraft, setOutputDraft] = useState('')
   const [appVersion, setAppVersion] = useState<string | null>(null)
@@ -65,7 +66,10 @@ export default function App() {
       })
     void api
       .gpu()
-      .then((g) => setGpu(g.cuda ? `GPU aktif: ${g.detail}` : `GPU tidak terdeteksi (${g.detail})`))
+      .then((g) => {
+        setGpuOk(g.cuda)
+        setGpu(g.cuda ? `GPU aktif: ${g.detail}` : `GPU tidak terdeteksi (${g.detail})`)
+      })
       .catch(() => setGpu('Status GPU tidak diketahui'))
     void api
       .setup()
@@ -325,6 +329,13 @@ export default function App() {
             </>
           )}
         </div>
+        {gpuOk === false && (
+          <div className="warnbox">
+            Mode CPU: invisible watermark (pixel SynthID) <strong>dilewati otomatis</strong> karena
+            GPU NVIDIA tidak terdeteksi — hasil <strong>tidak full-clean</strong>. Visible +
+            metadata tetap dibersihkan. Tiap hasil yang tidak full bertanda peringatan kuning.
+          </div>
+        )}
         <div
           className="dropzone"
           style={{ outline: dragOver ? '2px dashed #2563eb' : undefined }}
@@ -421,6 +432,11 @@ export default function App() {
                         {formatBytes(r.src_bytes)} — {r.status}
                       </div>
                       {r.error && <div style={{ color: '#f87171', marginTop: 6 }}>{r.error}</div>}
+                      {(r.warnings ?? []).map((w) => (
+                        <div key={w.slice(0, 40)} className="warnline">
+                          {w}
+                        </div>
+                      ))}
                       {isBinaryError(r.error) && hasSetup && (
                         <div className="actions">
                           <button onClick={() => void handleInstallKey('cli')}>

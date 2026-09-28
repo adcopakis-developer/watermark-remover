@@ -16,6 +16,8 @@ export interface VwRecord {
   batch_id: string | null
   batch_name: string | null
   out_file: string | null
+  out_folder?: string | null
+  warnings?: string[]
   mode: VwMode | null
   mark: VwMark | null
   status: VwStatus

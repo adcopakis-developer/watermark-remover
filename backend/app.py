@@ -172,7 +172,7 @@ async def gpu_status():
     if not info["cuda"]:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "python", "-c", "import torch;print(torch.cuda.is_available())",
+                sys.executable, "-c", "import torch;print(torch.cuda.is_available())",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -602,6 +602,27 @@ def build_args(mode: str, mark: str, src: str, out: str) -> list[str]:
     return args
 
 
+def has_cuda_sync() -> bool:
+    """Cek cepat GPU NVIDIA (tanpa load torch)."""
+    if shutil.which("nvidia-smi"):
+        return True
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", "import torch;print(torch.cuda.is_available())"],
+            capture_output=True, timeout=60,
+        )
+        return r.returncode == 0 and r.stdout.decode().strip() == "True"
+    except Exception:
+        return False
+
+
+INVISIBLE_WARN = (
+    "Tidak full-clean: invisible watermark (pixel SynthID) DILEWATI "
+    "karena GPU NVIDIA/CUDA tidak terdeteksi. "
+    "Visible + metadata tetap dibersihkan."
+)
+
+
 async def run_clean(vid: str, mode: str, mark: str) -> None:
     rows = load_store()
     rec = find_rec(rows, vid)
@@ -612,13 +633,21 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
         src = STORAGE / rec["src_file"]
         ext = Path(rec["src_file"]).suffix.lower() or ".mp4"
         out = workdir / f"clean{ext}"
-        res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
-        note = ""
-        err_low = (res["stderr"] or "").lower()
-        if res["code"] != 0 and ("cuda" in err_low or "diffusion" in err_low):
-            # Mesin tanpa CUDA/extra diffusion: fallback CPU (visible + metadata).
+        warnings: list[str] = []
+        cuda = await asyncio.to_thread(has_cuda_sync)
+        if cuda:
+            res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
+            err_low = (res["stderr"] or "").lower()
+            if res["code"] != 0 and ("cuda" in err_low or "diffusion" in err_low):
+                # CUDA ada tapi extra diffusion hilang: fallback CPU.
+                res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
+                warnings.append(INVISIBLE_WARN + " (extra diffusion tidak terinstall)")
+        else:
+            # Hemat: langsung CPU tanpa mencoba profil CUDA yang pasti gagal.
             res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
-            note = " [fallback CPU: tanpa invisible]"
+            if ext in (".mp4", ".mov", ".m4v"):
+                warnings.append(INVISIBLE_WARN)
+        note = f" [{'; '.join(warnings)}]" if warnings else ""
         rows = load_store()
         rec = find_rec(rows, vid)
         if not rec:
@@ -626,6 +655,7 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
         if res["timed_out"] or res["code"] != 0 or not out.exists():
             rec.update(
                 status="failed",
+                warnings=warnings,
                 error=(res["stderr"] or res["stdout"])[-500:] or "Gagal memproses",
                 report=f"[{mode}]{note} exit={res['code']}\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
                 updated_at=now_wib(),
@@ -650,6 +680,7 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
                 status="done",
                 out_file=str(dest),
                 out_folder=str(out_dir),
+                warnings=warnings,
                 report=f"[{mode}]{note} exit=0\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
                 error=None,
                 updated_at=now_wib(),

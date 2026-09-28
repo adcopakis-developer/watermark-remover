@@ -44,6 +44,16 @@ h1 {
   margin: 12px 0 0;
 }
 
+.warnline {
+  background: #3a2c10;
+  border: 1px solid #8a6d1c;
+  color: #fcd34d;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
 .muted {
   color: #9aa1b2;
   font-size: 13px;
