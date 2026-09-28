@@ -287,7 +287,8 @@ export default function App() {
         <h2>Folder Hasil</h2>
         <div className="muted">
           Root folder untuk semua hasil. Tiap proses otomatis membuat subfolder
-          tanggal-jam di dalamnya berisi file <code>*_removedfull.mp4</code>.
+          tanggal-jam di dalamnya berisi file <code>*_clean_fully.mp4</code> atau
+          <code>*_clean_partially.mp4</code> (bila invisible dilewati tanpa GPU).
         </div>
         <div className="row">
           <label className="field" style={{ flex: 1 }}>

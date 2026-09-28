@@ -661,7 +661,7 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
                 updated_at=now_wib(),
             )
         else:
-            # Hasil: {output_root}/{folder-datetime}/{nama}_removedfull{ext}.
+            # Hasil: {output_root}/{folder-datetime}/{nama}_clean_{fully|partially}{ext}.
             # Folder grup bulk = batch_name; upload satuan = stamp baru.
             settings = load_settings()
             root = Path(settings["output_root"])
@@ -670,11 +670,12 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
             out_dir = root / folder
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = sanitize_stem(rec.get("orig_name") or rec["src_file"])
-            dest = out_dir / f"{stem}_removedfull{ext}"
+            tag = "clean_partially" if warnings else "clean_fully"
+            dest = out_dir / f"{stem}_{tag}{ext}"
             n = 1
             while dest.exists():
                 n += 1
-                dest = out_dir / f"{stem}_removedfull_{n}{ext}"
+                dest = out_dir / f"{stem}_{tag}_{n}{ext}"
             shutil.copy(out, dest)
             rec.update(
                 status="done",
