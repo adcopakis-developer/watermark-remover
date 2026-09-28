@@ -5,13 +5,15 @@
   "description": "Hapus watermark AI video (visible + invisible + metadata) memakai GPU lokal",
   "main": "electron/main.js",
   "scripts": {
-    "dev:be": "uvicorn app:app --app-dir backend --host 127.0.0.1 --port 8000",
+    "dev": "concurrently -k -n BE,FE,APP \"backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}\" \"npm run dev --prefix frontend\" \"cross-env ELEC_DEV=1 electron .\"",
+    "dev:be": "backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}",
     "dev:fe": "npm run dev --prefix frontend",
     "dev:electron": "cross-env ELEC_DEV=1 electron .",
     "dist:win": "npm run build --prefix frontend && electron-builder --win nsis --x64",
     "dist:mac": "npm run build --prefix frontend && electron-builder --mac dmg --arm64"
   },
   "devDependencies": {
+    "concurrently": "^10.0.5",
     "cross-env": "^7.0.3",
     "electron": "^36.0.0",
     "electron-builder": "^26.0.0"
@@ -27,14 +29,20 @@
       {
         "from": "backend-dist/",
         "to": "backend-dist/",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.video",
       "identity": null
     },

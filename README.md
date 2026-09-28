@@ -10,18 +10,26 @@ GPU/VGA lokal. Tanpa opsi mode.
 - `pip install -r backend/requirements.txt`
 - `pip install "remove-ai-watermarks[video,diffusion]"` (profil invisible = CUDA-only)
 
-## Dev
+## Dev (tanpa compile, sekali perintah)
 
-```bat
-REM terminal 1 — backend :8000
-cd backend && uvicorn app:app --host 127.0.0.1 --port 8000
+```bash
+# sekali saja: venv + deps + frontend
+uv venv --seed backend/.venv
+uv pip install --python backend/.venv/bin/python -r backend/requirements.txt
+npm install && npm install --prefix frontend
 
-REM terminal 2 — frontend :5173
-cd frontend && npm install && npm run dev
-
-REM terminal 3 — electron (setelah 2 di atas jalan)
-set ELEC_DEV=1 && npx electron .
+# tiap hari: backend :8000 + frontend :5173 + electron (boleh npm/pnpm)
+pnpm dev
+# atau: npm run dev
 ```
+
+Buka otomatis jendela Electron (mode dev, DevTools terbuka). Edit
+`frontend/src/*` hot-reload langsung — tidak perlu build dmg tiap fix.
+Backend dev pakai `backend/.venv`; install library test:
+`uv pip install --python backend/.venv/bin/python "remove-ai-watermarks[video]"`.
+
+Tiga proses terpisah tetap bisa (3 terminal): `dev:be`, `dev:fe`,
+`dev:electron`.
 
 ## Build installer Windows (di mesin Windows GPU, sekali jalan)
 

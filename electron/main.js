@@ -73,7 +73,8 @@ async function createWindow() {
     },
   });
   if (isDev) {
-    await mainWin.loadURL('http://127.0.0.1:5173');
+    const fePort = process.env.FE_PORT || '5173';
+    await mainWin.loadURL(`http://127.0.0.1:${fePort}`);
     mainWin.webContents.openDevTools({ mode: 'detach' });
   } else {
     await mainWin.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
