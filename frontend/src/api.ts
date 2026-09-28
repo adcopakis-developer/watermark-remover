@@ -79,12 +79,24 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ output_root }),
     }),
-  meta: () => req<{ version: string; has_setup: boolean }>('/api/meta'),
+  meta: () =>
+    req<{ version: string; has_setup: boolean }>('/api/meta').then((m) => ({
+      version: m.version ?? '?',
+      has_setup: m.has_setup ?? false,
+    })),
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
-  setup: () => req<SetupStatus>('/api/setup/status'),
+  setup: () =>
+    req<SetupStatus>('/api/setup/status').then((s) => ({
+      ...s,
+      items: s.items ?? [],
+      log: s.log ?? '',
+    })),
   installKey: (key: string) =>
     req<{ installing: string | null }>(`/api/setup/install/${key}`, { method: 'POST' }),
-  batches: () => req<{ data: VwBatch[] }>('/api/batches').then((r) => r.data),
+  batches: () =>
+    req<{ data: VwBatch[] }>('/api/batches').then((r) =>
+      (r.data ?? []).map((b) => ({ ...b, videos: b.videos ?? [] })),
+    ),
 
   uploadBatch: (files: File[], onProgress?: (pct: number) => void): Promise<VwBatch> => {
     const form = new FormData()
