@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import type { VwBatch, VwRecord, VwSettings, VwSetup } from './api'
+import InstallGuide from './InstallGuide'
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
@@ -250,6 +251,7 @@ export default function App() {
             )}
           </>
         )}
+        <InstallGuide />
       </div>
 
       <div className="card">

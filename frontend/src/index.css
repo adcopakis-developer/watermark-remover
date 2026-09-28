@@ -219,6 +219,68 @@ button.danger {
   background: #f59e0b;
 }
 
+.guide {
+  margin-top: 16px;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.guide summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.guide-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+.guide-tabs button {
+  font-size: 12px;
+  padding: 6px 12px;
+  background: transparent;
+}
+
+.guide-tabs button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.guide-steps {
+  margin: 8px 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step-cmd {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  background: #0f1115;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.step-cmd code {
+  flex: 1;
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.copy-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  flex-shrink: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr;
