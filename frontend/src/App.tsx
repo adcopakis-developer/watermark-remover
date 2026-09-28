@@ -73,15 +73,6 @@ export default function App() {
     }
   }, [draft])
 
-  const handlePickFolder = useCallback(async () => {
-    try {
-      const picked = await window.watermarkApp?.selectFolder?.()
-      if (picked && draft) setDraft({ ...draft, output_root: picked })
-    } catch {
-      /* abaikan */
-    }
-  }, [draft])
-
   const anyProcessing = batches.some((b) => b.videos.some((v) => v.status === 'processing'))
 
   useEffect(() => {
@@ -245,11 +236,6 @@ export default function App() {
                   onChange={(e) => setDraft({ ...draft, output_root: e.target.value })}
                 />
               </label>
-              {window.watermarkApp?.selectFolder && (
-                <button className="ghost" onClick={() => void handlePickFolder()}>
-                  Pilih...
-                </button>
-              )}
             </div>
             <div className="actions">
               <button onClick={() => void handleSaveSettings()}>Simpan</button>

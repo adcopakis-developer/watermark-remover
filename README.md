@@ -1,73 +1,47 @@
-# watermark-remover (Electron + GPU lokal, 1 halaman, tanpa login)
+# watermark-remover (dev mode, 1 halaman, tanpa login)
 
 Upload video → satu tombol **Hapus Watermark** → full-clean
 (visible + invisible + metadata) via `remove-ai-watermarks` memakai
 GPU/VGA lokal. Tanpa opsi mode.
 
-## Syarat (mesin Windows bergPU NVIDIA)
+## Syarat
 
-- Python 3.11–3.14, NVIDIA driver + CUDA, `ffmpeg` di PATH, Node 18+
+- Python 3.11–3.13, Node 18+
+- `ffmpeg` di PATH
+- NVIDIA driver + CUDA (opsional, untuk invisible watermark; tanpa GPU otomatis fallback CPU)
 - `pip install -r backend/requirements.txt`
-- `pip install "remove-ai-watermarks[video,diffusion]"` (profil invisible = CUDA-only)
+- `pip install "remove-ai-watermarks[video]"` (tambah `[video,diffusion]` bila ada GPU NVIDIA)
 
-## Dev (tanpa compile, sekali perintah)
+## Jalan (sekali perintah)
 
 ```bash
-# sekali saja: venv + deps + frontend
-uv venv --seed backend/.venv
-uv pip install --python backend/.venv/bin/python -r backend/requirements.txt
-npm install && npm install --prefix frontend
+# sekali saja: clone + semua deps (postinstall otomatis install frontend)
+npm i
 
-# tiap hari: backend :8000 + frontend :5173 + electron (boleh npm/pnpm)
-pnpm dev
-# atau: npm run dev
+# sekali saja: venv backend + cek ffmpeg/CLI (dev juga bootstrap otomatis bila lupa)
+npm run setup
+# bila remove-ai-watermarks belum ada, di venv: pip install "remove-ai-watermarks[video]"
+
+# tiap hari: backend :8000 + frontend :5173 (tanpa aktivasi venv manual)
+npm run dev
 ```
 
-Buka otomatis jendela Electron (mode dev, DevTools terbuka). Edit
-`frontend/src/*` hot-reload langsung — tidak perlu build dmg tiap fix.
-Backend dev pakai `backend/.venv`; install library test:
-`uv pip install --python backend/.venv/bin/python "remove-ai-watermarks[video]"`.
+Buka http://127.0.0.1:5173. Edit `frontend/src/*` hot-reload langsung.
 
-Tiga proses terpisah tetap bisa (3 terminal): `dev:be`, `dev:fe`,
-`dev:electron`.
+Tiga proses terpisah tetap bisa: `npm run dev:be`, `npm run dev:fe`.
 
-## Matriks OS: build di mana, jalan di mana
+## Cara pakai
 
-| Target | Build di | Catatan |
-|---|---|---|
-| mac arm64 (M1-M4) | Mac arm64 (`scripts/build-mac.sh` / `npm run dist:mac`) | Backend exe PyInstaller mengikuti arch host |
-| mac Intel x64 | **Mac Intel** (`npm run dist:mac-intel`, backend via `build-mac.sh` di sana) | exe Python tidak bisa cross-build; di Mac arm64 hanya shell Electron-nya yang bisa divalidasi |
-| Windows x64 | **Mesin Windows** (`scripts\build-win.bat`) | NSIS butuh Wine bila dipaksa dari Mac; exe Python wajib dibuild di Windows. Tanpa code-sign → SmartScreen "install anyway" |
-
-Kode backend/frontend murni cross-platform (asyncio subprocess, PATH/PATHEXT,
-`os.pathsep`, winget/brew per OS) — tidak ada syscall khusus OS.
-
-## Build installer Windows (di mesin Windows GPU, sekali jalan)
-
-```bat
-git clone https://github.com/adcopakis-developer/watermark-remover.git
-cd watermark-remover
-scripts\build-win.bat
-```
-
-Script mengerjakan: venv + `remove-ai-watermarks[video,diffusion]` +
-PyInstaller (`packaging/`) → copy ke `backend-dist/` → `npm run dist:win`.
-Hasil: installer NSIS x64 di `release/`. Klik dua kali untuk install,
-buka "Watermark Remover" dari Start Menu (backend ikut nyala otomatis,
-storage di `%APPDATA%\Watermark Remover\storage`).
-
-Catatan: Windows SmartScreen mungkin memberi peringatan (app tanpa
-code-sign) → pilih install anyway. Badge GPU di halaman utama harus
-bertuliskan aktif; jika tidak, cek driver NVIDIA/CUDA.
+1. Buka app → card **Library Pendukung** tampil status CLI + FFmpeg.
+2. Belum hijau? Isi path manual di input (kosongkan = pakai PATH) → Simpan.
+3. Drop banyak video → **Hapus Watermark Semua** → hasil di folder tanggal-jam.
 
 ## API backend
 
+- `GET /api/setup/status` — status CLI/FFmpeg
+- `GET /api/settings`, `PUT /api/settings` — output_root + path override
 - `GET /api/gpu` — status CUDA lokal
-- `GET /api/videos`, `GET /api/videos/{id}`
-- `POST /api/videos/upload` (multipart, max 500MB)
-- `POST /api/videos/{id}/identify`
-- `POST /api/videos/{id}/clean` — selalu full-clean GPU
+- `GET /api/batches`, `POST /api/batches/upload` (multipart, max 500MB/file, max 50 file)
+- `POST /api/batches/{id}/clean-all`
 - `GET /api/videos/{id}/download?kind=clean|src`
-- `DELETE /api/videos/{id}`
-
-Hapus folder ini = uninstall total.
+- `DELETE /api/videos/{id}`, `DELETE /api/batches/{id}`

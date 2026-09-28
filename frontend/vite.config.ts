@@ -5,8 +5,6 @@ const BACKEND_PORT = process.env.BACKEND_PORT || '8000'
 const FE_PORT = parseInt(process.env.FE_PORT || '5173', 10)
 
 export default defineConfig({
-  // './' agar index.html + aset jalan via file:// di Electron packaged.
-  base: './',
   plugins: [react()],
   server: {
     port: FE_PORT,

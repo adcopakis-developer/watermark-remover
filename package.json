@@ -3,55 +3,14 @@
   "private": true,
   "version": "1.1.0",
   "description": "Hapus watermark AI video (visible + invisible + metadata) memakai GPU lokal",
-  "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently -k -n BE,FE,APP \"backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}\" \"npm run dev --prefix frontend\" \"cross-env ELEC_DEV=1 electron .\"",
-    "dev:web": "concurrently -k -n BE,FE \"backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}\" \"npm run dev --prefix frontend\"",
-    "dev:be": "backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}",
-    "dev:fe": "npm run dev --prefix frontend",
-    "dev:electron": "cross-env ELEC_DEV=1 electron .",
-    "dist:win": "npm run build --prefix frontend && electron-builder --win nsis --x64",
-    "dist:mac": "npm run build --prefix frontend && electron-builder --mac dmg --arm64",
-    "dist:mac-intel": "npm run build --prefix frontend && electron-builder --mac dmg --x64",
-    "release": "bash scripts/release-all.sh"
+    "postinstall": "npm install --prefix frontend",
+    "setup": "node scripts/setup.mjs",
+    "dev": "concurrently -k -n BE,FE \"node scripts/dev-be.mjs\" \"npm run dev --prefix frontend\"",
+    "dev:be": "node scripts/dev-be.mjs",
+    "dev:fe": "npm run dev --prefix frontend"
   },
   "devDependencies": {
-    "concurrently": "^10.0.5",
-    "cross-env": "^7.0.3",
-    "electron": "^36.0.0",
-    "electron-builder": "^26.0.0"
-  },
-  "build": {
-    "appId": "id.aerostreet.watermarkremover",
-    "productName": "Watermark Remover",
-    "files": [
-      "electron/**/*",
-      "frontend/dist/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "backend-dist/",
-        "to": "backend-dist/",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "win": {
-      "target": [
-        "nsis"
-      ]
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.video",
-      "identity": null
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
+    "concurrently": "^10.0.5"
   }
 }

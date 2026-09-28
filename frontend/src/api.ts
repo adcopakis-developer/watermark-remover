@@ -1,10 +1,5 @@
 export type VwMode = 'visible' | 'metadata' | 'all' | 'invisible'
 
-declare global {
-  interface Window {
-    watermarkApp?: { version: string; platform: string; selectFolder?: () => Promise<string | null> }
-  }
-}
 export type VwMark =
   | 'auto' | 'sora' | 'veo' | 'seedance' | 'doubao' | 'dola' | 'hailuo' | 'kling'
 export type VwStatus = 'uploaded' | 'processing' | 'done' | 'failed'
@@ -46,13 +41,9 @@ export interface VwSetup {
   ffmpeg: { installed: boolean; path: string }
 }
 
-// Di Electron packaged (file://) tidak ada proxy vite,
-// jadi API harus absolut ke backend lokal. Port sama dengan main.js.
-const API_BASE =
-  window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : ''
-
+// Dev mode: selalu via proxy vite '/api' -> backend :8000.
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(API_BASE + url, init)
+  const res = await fetch(url, init)
   const text = await res.text()
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
@@ -89,7 +80,7 @@ export const api = {
     for (const f of files) form.append('files', f)
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', API_BASE + '/api/batches/upload')
+      xhr.open('POST', '/api/batches/upload')
       if (onProgress) {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable && e.total > 0) onProgress(Math.round((e.loaded / e.total) * 100))
@@ -135,5 +126,5 @@ export const api = {
   removeBatch: (batchId: string) =>
     req<{ ok: boolean }>(`/api/batches/${batchId}`, { method: 'DELETE' }),
   downloadUrl: (id: string, kind: 'clean' | 'src' = 'clean') =>
-    `${API_BASE}/api/videos/${id}/download?kind=${kind}`,
+    `/api/videos/${id}/download?kind=${kind}`,
 }
