@@ -237,6 +237,7 @@ async def run_cli(args: list[str], timeout: int = 3600) -> dict:
 
 SETUP_LOG = STORAGE / "_setup.log"
 _setup: dict = {"installing": None, "last_error": ""}  # installing: None | key
+_memlog: list[str] = []  # ring buffer: anti file hilang/rotasi/proses ganda
 
 
 def user_site_bins() -> list[str]:
@@ -398,12 +399,27 @@ def pip_candidates() -> list[list[str]]:
 
 
 def setup_append_log(text: str) -> None:
+    line = f"[{now_wib()}] {text}"
+    _memlog.append(line)
+    del _memlog[:-50]
     try:
         STORAGE.mkdir(parents=True, exist_ok=True)
         with open(SETUP_LOG, "a") as f:
-            f.write(f"[{now_wib()}] {text}\n")
+            f.write(line + "\n")
     except Exception:
         pass
+
+
+def setup_read_log() -> str:
+    # Memory dulu (kebal rotasi file & beda proses), fallback ke file.
+    if _memlog:
+        return "\n".join(_memlog[-30:])
+    try:
+        if SETUP_LOG.exists():
+            return "\n".join(SETUP_LOG.read_text().splitlines()[-30:])
+    except Exception:
+        pass
+    return ""
 
 
 @app.get("/api/setup/status")
@@ -417,12 +433,7 @@ def setup_status():
         cuda = bool(shutil.which("nvidia-smi"))
     except Exception:
         pass
-    log = ""
-    try:
-        if SETUP_LOG.exists():
-            log = "\n".join(SETUP_LOG.read_text().splitlines()[-30:])
-    except Exception:
-        pass
+    log = setup_read_log()
     items = [
         {
             "key": "python",
@@ -500,13 +511,18 @@ async def run_pip_install(packages: list[str], tag: str) -> bool:
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     assert proc.stdout is not None
+    tail: list[str] = []
     async for raw in proc.stdout:
-        setup_append_log(f"[{tag}] " + raw.decode(errors="replace").rstrip()[-400:])
+        line = raw.decode(errors="replace").rstrip()[-400:]
+        tail.append(line)
+        tail = tail[-8:]
+        setup_append_log(f"[{tag}] " + line)
     await proc.wait()
     ok = proc.returncode == 0
     setup_append_log(f"[{tag}] {'OK' if ok else f'ERROR exit={proc.returncode}'}")
     if not ok:
-        _setup["last_error"] = f"pip exit={proc.returncode} (lihat log)"
+        hint = " ".join(tail[-3:])[-300:]
+        _setup["last_error"] = f"pip exit={proc.returncode}: {hint or '(lihat log)'}"
     return ok
 
 
