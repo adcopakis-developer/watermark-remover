@@ -6,6 +6,7 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -k -n BE,FE,APP \"backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}\" \"npm run dev --prefix frontend\" \"cross-env ELEC_DEV=1 electron .\"",
+    "dev:web": "concurrently -k -n BE,FE \"backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}\" \"npm run dev --prefix frontend\"",
     "dev:be": "backend/.venv/bin/uvicorn app:app --app-dir backend --host 127.0.0.1 --port ${BACKEND_PORT:-8000}",
     "dev:fe": "npm run dev --prefix frontend",
     "dev:electron": "cross-env ELEC_DEV=1 electron .",
