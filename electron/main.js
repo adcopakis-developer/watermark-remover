@@ -6,6 +6,39 @@ const fs = require('fs');
 const isDev = process.env.ELEC_DEV === '1';
 const BACKEND_PORT = process.env.BACKEND_PORT || '8000';
 
+// App GUI (launchd) dapat PATH minim: /usr/bin:/bin saja.
+// Suntik lokasi umum agar backend bisa menemukan python3, pip,
+// ~/Library/Python/*/bin, ~/.local/bin, dan ffmpeg (brew).
+function buildBackendEnv() {
+  const home = app.getPath('home');
+  const extra = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/opt/homebrew/opt/ffmpeg/bin',
+    '/opt/homebrew/opt/python/libexec/bin',
+    '/usr/local/bin',
+    `${home}/.local/bin`,
+    `${home}/Library/Python/3.13/bin`,
+    `${home}/Library/Python/3.12/bin`,
+    `${home}/Library/Python/3.11/bin`,
+  ];
+  const seen = new Set();
+  const clean = [];
+  const base = (process.env.PATH || '').split(':');
+  for (const p of [...extra, ...base]) {
+    if (p && !seen.has(p) && fs.existsSync(p)) {
+      seen.add(p);
+      clean.push(p);
+    }
+  }
+  return {
+    ...process.env,
+    PATH: clean.join(':'),
+    BACKEND_PORT,
+    STORAGE_DIR: path.join(app.getPath('userData'), 'storage'),
+  };
+}
+
 let backendProc = null;
 let mainWin = null;
 
@@ -32,11 +65,7 @@ function startBackend() {
       return;
     }
     backendProc = spawn(exe, [], {
-      env: {
-        ...process.env,
-        BACKEND_PORT,
-        STORAGE_DIR: path.join(app.getPath('userData'), 'storage'),
-      },
+      env: buildBackendEnv(),
       windowsHide: true,
     });
     backendProc.on('error', (err) => {

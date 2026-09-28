@@ -218,15 +218,16 @@ _setup: dict = {"installing": None}  # None | item key sedang diinstall
 
 
 def user_site_bins() -> list[str]:
-    """Lokasi binary pip --user per OS."""
-    vers = f"{sys.version_info.major}.{sys.version_info.minor}"
+    """Lokasi binary pip --user per OS (semua versi minor yang didukung)."""
     cands = [str(Path.home() / ".local" / "bin")]
     if sys.platform == "darwin":
-        cands.append(str(Path.home() / "Library" / "Python" / vers / "bin"))
+        for vers in ("3.14", "3.13", "3.12", "3.11"):
+            cands.append(str(Path.home() / "Library" / "Python" / vers / "bin"))
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA", "")
         if appdata:
-            cands.append(str(Path(appdata) / "Python" / f"Python{sys.version_info.major}{sys.version_info.minor}" / "Scripts"))
+            for vers in ("313", "312", "311"):
+                cands.append(str(Path(appdata) / "Python" / f"Python{vers}" / "Scripts"))
     return cands
 
 
@@ -248,11 +249,38 @@ def resolve_cli() -> Optional[str]:
     return None
 
 
+def frozen_ffmpeg_dir() -> Optional[str]:
+    """ffmpeg bawaan bundle PyInstaller (onedir): cari ffmpeg* di sebelah exe."""
+    if not getattr(sys, "frozen", False):
+        return None
+    roots = [
+        Path(sys.executable).parent / "_internal" / "imageio_ffmpeg" / "binaries",
+        Path(sys.executable).parent / "imageio_ffmpeg" / "binaries",
+    ]
+    for d in roots:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if not f.is_file():
+                continue
+            if f.name.startswith("ffmpeg") or f.suffix == ".exe":
+                try:
+                    if not os.access(f, os.X_OK):
+                        os.chmod(f, 0o755)
+                except Exception:
+                    pass
+                return str(d)
+    return None
+
+
 def ffmpeg_exe_dir() -> Optional[str]:
-    """Dir ffmpeg: PATH dulu, lalu binary bawaan imageio-ffmpeg."""
+    """Dir ffmpeg: PATH, lalu bundle frozen, lalu import imageio-ffmpeg."""
     found = shutil.which("ffmpeg")
     if found:
         return str(Path(found).parent)
+    frozen = frozen_ffmpeg_dir()
+    if frozen:
+        return frozen
     try:
         import imageio_ffmpeg  # type: ignore
 
@@ -335,8 +363,7 @@ def setup_status():
             "installed": python_ok,
             "detail": f"{pips[0][0]}" if python_ok else "tidak ditemukan",
             "installing": _setup["installing"] == "python",
-        },
-        {
+        },        {
             "key": "cli",
             "label": "remove-ai-watermarks (+ffmpeg bila perlu)",
             "required": True,
@@ -361,12 +388,26 @@ def setup_status():
             "installing": False,
         },
     ]
-    return {
+    resp: dict = {
         "ready": bool(cli and ffmpeg),
         "installing": _setup["installing"],
         "items": items,
         "log": log,
     }
+    if os.environ.get("VW_DEBUG") == "1":
+        exe = sys.executable
+        probe = str(Path(exe).parent / "_internal" / "imageio_ffmpeg" / "binaries")
+        try:
+            listing = sorted(os.listdir(probe))
+        except Exception as e:  # noqa: BLE001
+            listing = [f"LIST_FAIL: {e}"]
+        resp["_debug"] = {
+            "frozen": getattr(sys, "frozen", False),
+            "executable": exe,
+            "probe": probe,
+            "listing": listing,
+        }
+    return resp
 
 
 async def run_pip_install(packages: list[str], tag: str) -> bool:
