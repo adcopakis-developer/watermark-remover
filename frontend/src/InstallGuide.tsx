@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-type GuideOS = 'mac' | 'windows' | 'linux'
+export type GuideOS = 'mac' | 'windows' | 'linux'
 
 interface GuideStep {
   text: string
@@ -51,6 +51,11 @@ const STEPS: Record<GuideOS, GuideStep[]> = {
       cmd: 'py -3.12 -m pip install --user "remove-ai-watermarks[video,diffusion]"',
     },
     {
+      text: 'Bila cek di bawah bilang "not recognized": exe-nya ada tapi foldernya belum di PATH. Jalankan ini di PowerShell, tutup-buka terminal:',
+      cmd: '[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:APPDATA\\Python\\Python312\\Scripts", "User")',
+      note: 'Alternatif tanpa utak-atik PATH: salin path lengkap C:\\Users\\nama\\AppData\\Roaming\\Python\\Python312\\Scripts\\remove-ai-watermarks.exe ke kolom Path di atas (ganti "nama" dengan username Windows).',
+    },
+    {
       text: 'Cek library:',
       cmd: 'remove-ai-watermarks --version',
     },
@@ -77,7 +82,7 @@ const STEPS: Record<GuideOS, GuideStep[]> = {
   ],
 }
 
-function detectOS(): GuideOS {
+export function detectOS(): GuideOS {
   const ua = navigator.userAgent.toLowerCase()
   const plat = (navigator.platform || '').toLowerCase()
   if (plat.startsWith('mac') || ua.includes('mac os')) return 'mac'

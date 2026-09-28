@@ -122,15 +122,36 @@ def is_executable_file(p: Path) -> bool:
     return p.is_file() and os.access(p, os.X_OK)
 
 
+def default_cli_candidates() -> list[str]:
+    """Lokasi umum pip --user (statis, tanpa subprocess). Windows: instalasi
+    --user tidak masuk PATH, exe ada di %APPDATA%\\Python\\Python3xx\\Scripts."""
+    name = "remove-ai-watermarks.exe" if os.name == "nt" else "remove-ai-watermarks"
+    cands = [str(Path.home() / ".local" / "bin" / name)]
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            for tag in ("Python313", "Python312", "Python311"):
+                cands.append(str(Path(appdata) / "Python" / tag / "Scripts" / name))
+    else:
+        for ver in ("3.13", "3.12", "3.11"):
+            cands.append(str(Path.home() / "Library" / "Python" / ver / "bin" / name))
+    return cands
+
+
 def resolve_cli_path() -> Optional[str]:
-    """User override > shutil.which. Tidak ada fallback lain."""
+    """User override > shutil.which > lokasi umum pip --user."""
     s = load_settings()
     override = (s.get("cli_path") or "").strip()
     if override and is_executable_file(Path(override).expanduser()):
         return str(Path(override).expanduser().resolve())
     name = "remove-ai-watermarks.exe" if os.name == "nt" else "remove-ai-watermarks"
     found = shutil.which(name)
-    return found
+    if found:
+        return found
+    for c in default_cli_candidates():
+        if is_executable_file(Path(c)):
+            return c
+    return None
 
 
 def ffmpeg_exe_dir() -> Optional[str]:

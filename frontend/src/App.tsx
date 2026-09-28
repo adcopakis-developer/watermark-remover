@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import type { VwBatch, VwRecord, VwSettings, VwSetup } from './api'
-import InstallGuide from './InstallGuide'
+import InstallGuide, { detectOS, type GuideOS } from './InstallGuide'
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
@@ -14,6 +14,19 @@ function formatBatchName(name: string): string {
   const m = name.match(/^bulk_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/)
   if (!m) return name
   return `Bulk ${m[3]}-${m[2]}-${m[1]} ${m[4]}:${m[5]}:${m[6]}`
+}
+
+// Contoh lokasi install per OS untuk placeholder input path.
+const CLI_PLACEHOLDER: Record<GuideOS, string> = {
+  mac: '/Users/nama/Library/Python/3.12/bin/remove-ai-watermarks',
+  windows: 'C:\\Users\\nama\\AppData\\Roaming\\Python\\Python312\\Scripts\\remove-ai-watermarks.exe',
+  linux: '/home/nama/.local/bin/remove-ai-watermarks',
+}
+
+const FFMPEG_PLACEHOLDER: Record<GuideOS, string> = {
+  mac: '/opt/homebrew/bin/ffmpeg',
+  windows: 'C:\\ffmpeg\\bin\\ffmpeg.exe',
+  linux: '/usr/bin/ffmpeg',
 }
 
 export default function App() {
@@ -181,6 +194,10 @@ export default function App() {
   const ffmpegPath = draft?.ffmpeg_path ?? ''
   const outputRoot = draft?.output_root ?? ''
   const activeRoot = settings?.output_root ?? ''
+  const osNow = detectOS()
+  // Placeholder = path terdeteksi mesin ini bila ada, else contoh lokasi umum OS user.
+  const cliPlaceholder = setup?.cli.path || CLI_PLACEHOLDER[osNow]
+  const ffmpegPlaceholder = setup?.ffmpeg.path || FFMPEG_PLACEHOLDER[osNow]
 
   return (
     <div className="wrap">
@@ -213,7 +230,7 @@ export default function App() {
                   type="text"
                   value={cliPath}
                   onChange={(e) => setDraft({ ...draft, cli_path: e.target.value })}
-                  placeholder="/usr/local/bin/remove-ai-watermarks"
+                  placeholder={cliPlaceholder}
                 />
               </label>
             </div>
@@ -224,7 +241,7 @@ export default function App() {
                   type="text"
                   value={ffmpegPath}
                   onChange={(e) => setDraft({ ...draft, ffmpeg_path: e.target.value })}
-                  placeholder="/opt/homebrew/bin/ffmpeg"
+                  placeholder={ffmpegPlaceholder}
                 />
               </label>
             </div>
