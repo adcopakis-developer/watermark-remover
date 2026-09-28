@@ -240,17 +240,51 @@ _setup: dict = {"installing": None}  # None | item key sedang diinstall
 
 
 def user_site_bins() -> list[str]:
-    """Lokasi binary pip --user per OS (semua versi minor yang didukung)."""
-    cands = [str(Path.home() / ".local" / "bin")]
+    """Lokasi binary pip --user: tebakan statis + tanya tiap interpreter
+    (sysconfig, di-cache 120 dtk agar polling status tetap cepat)."""
+    return _user_site_bins_cached()
+
+
+_scripts_cache: dict = {"at": 0.0, "dirs": []}
+
+
+def _user_site_bins_cached() -> list[str]:
+    import time as _time
+
+    if _time.time() - _scripts_cache["at"] < 120 and _scripts_cache["dirs"]:
+        return list(_scripts_cache["dirs"])
+    dirs: list[str] = [str(Path.home() / ".local" / "bin")]
     if sys.platform == "darwin":
         for vers in ("3.14", "3.13", "3.12", "3.11"):
-            cands.append(str(Path.home() / "Library" / "Python" / vers / "bin"))
+            dirs.append(str(Path.home() / "Library" / "Python" / vers / "bin"))
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA", "")
         if appdata:
             for vers in ("313", "312", "311"):
-                cands.append(str(Path(appdata) / "Python" / f"Python{vers}" / "Scripts"))
-    return cands
+                dirs.append(str(Path(appdata) / "Python" / f"Python{vers}" / "Scripts"))
+    schemes = ["posix_user"] if sys.platform != "win32" else ["nt_user"]
+    for interp in (sys.executable, "python3.14", "python3.13", "python3.12", "python3.11", "python3"):
+        for scheme in schemes:
+            try:
+                r = subprocess.run(
+                    [interp, "-c",
+                     f"import sysconfig;print(sysconfig.get_path('scripts', scheme='{scheme}'))"],
+                    capture_output=True, timeout=30,
+                )
+                if r.returncode == 0:
+                    d = r.stdout.decode().strip()
+                    if d and d not in dirs:
+                        dirs.append(d)
+            except Exception:
+                pass
+    _scripts_cache["at"] = _time.time()
+    _scripts_cache["dirs"] = dirs
+    return list(dirs)
+
+
+def refresh_scripts_cache() -> None:
+    _scripts_cache["at"] = 0.0
+    _scripts_cache["dirs"] = []
 
 
 def resolve_cli() -> Optional[str]:
@@ -326,9 +360,17 @@ def py_version_ok(interp: str) -> bool:
         return False
 
 
+_pip_cache: dict = {"at": 0.0, "cands": []}
+
+
 def pip_candidates() -> list[list[str]]:
     """Base command pip yang valid + Python >= 3.11. Urutan: venv,
-    python3.11-3.14 eksplisit, python3, pip3. Python tua (Xcode/dll) dilewat."""
+    python3.11-3.14 eksplisit, python3, pip3. Python tua (Xcode/dll) dilewat.
+    Di-cache 120 dtk (masing-masing spawn subprocess)."""
+    import time as _time
+
+    if _time.time() - _pip_cache["at"] < 120 and _pip_cache["cands"]:
+        return list(_pip_cache["cands"])
     ok: list[list[str]] = []
     interps = [sys.executable, "python3.14", "python3.13", "python3.12", "python3.11", "python3"]
     for interp in interps:
@@ -348,6 +390,10 @@ def pip_candidates() -> list[list[str]]:
             ok.append(["pip3"])
     except Exception:
         pass
+    import time as _time2
+
+    _pip_cache["at"] = _time2.time()
+    _pip_cache["cands"] = ok
     return ok
 
 
@@ -464,7 +510,26 @@ async def do_install_key(key: str) -> None:
         if key == "cli":
             extra = "remove-ai-watermarks[video,diffusion]" if sys.platform == "win32" else "remove-ai-watermarks[video]"
             if await run_pip_install([extra, "imageio-ffmpeg"], "cli"):
-                setup_append_log(f"OK: CLI -> {resolve_cli()}")
+                # Refresh cache agar binary yang baru terinstall langsung ketemu,
+                # lalu VERIFIKASI bisa dieksekusi (bukan sekadar file ada).
+                refresh_scripts_cache()
+                cli = await asyncio.to_thread(resolve_cli)
+                if cli:
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            cli, "--version",
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                        )
+                        out, _ = await asyncio.wait_for(proc.communicate(), 60)
+                        setup_append_log(f"OK: CLI -> {cli} ({out.decode(errors='replace').strip()[:120]})")
+                    except Exception as e:  # noqa: BLE001
+                        setup_append_log(f"WARN: binary ada tapi gagal jalan: {cli} ({e})")
+                else:
+                    searched = await asyncio.to_thread(_user_site_bins_cached)
+                    setup_append_log(
+                        "WARN: pip sukses tapi binary tidak ketemu. Dicari di: "
+                        + ", ".join(searched)
+                    )
         elif key == "ffmpeg":
             await run_pip_install(["imageio-ffmpeg"], "ffmpeg")
         elif key == "python":
@@ -497,6 +562,9 @@ async def do_install_key(key: str) -> None:
     except Exception as e:  # noqa: BLE001
         setup_append_log(f"ERROR: {e}")
     finally:
+        refresh_scripts_cache()
+        _pip_cache["at"] = 0.0
+        _pip_cache["cands"] = []
         _setup["installing"] = None
 
 
