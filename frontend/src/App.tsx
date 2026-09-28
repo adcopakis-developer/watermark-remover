@@ -38,6 +38,7 @@ export default function App() {
   const [setupLog, setSetupLog] = useState('')
   const [setupLogOpen, setSetupLogOpen] = useState(false)
   const [setupError, setSetupError] = useState(false)
+  const [lastInstallError, setLastInstallError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -78,6 +79,7 @@ export default function App() {
         setSetupItems(s.items)
         setSetupLog(s.log)
         setSetupError(false)
+        setLastInstallError(s.last_error ?? '')
       })
       .catch(() => {
         // Backend tidak merespons (belum jalan / crash / port dipakai
@@ -105,6 +107,7 @@ export default function App() {
         .then((s) => {
           setSetupItems(s.items)
           setSetupLog(s.log)
+          setLastInstallError(s.last_error ?? '')
         })
         .catch(() => {})
     }, 3000)
@@ -293,6 +296,9 @@ export default function App() {
                 {!item.required && <span className="muted"> (opsional)</span>}
               </div>
               <div className="muted">{item.installing ? 'Menginstall...' : item.detail}</div>
+              {!item.installed && lastInstallError && (
+                <div className="warnline">Install terakhir gagal: {lastInstallError}</div>
+              )}
             </div>
             {!item.installed && item.key !== 'cuda' && (
               <button

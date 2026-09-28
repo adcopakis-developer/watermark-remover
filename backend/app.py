@@ -236,7 +236,7 @@ async def run_cli(args: list[str], timeout: int = 3600) -> dict:
 
 
 SETUP_LOG = STORAGE / "_setup.log"
-_setup: dict = {"installing": None}  # None | item key sedang diinstall
+_setup: dict = {"installing": None, "last_error": ""}  # installing: None | key
 
 
 def user_site_bins() -> list[str]:
@@ -459,6 +459,7 @@ def setup_status():
     resp: dict = {
         "ready": bool(cli and ffmpeg),
         "installing": _setup["installing"],
+        "last_error": _setup.get("last_error", ""),
         "items": items,
         "log": log,
     }
@@ -482,15 +483,19 @@ async def run_pip_install(packages: list[str], tag: str) -> bool:
     """pip install --user paket; True bila sukses. Log ke SETUP_LOG."""
     cands = await asyncio.to_thread(pip_candidates)
     if not cands:
-        setup_append_log("ERROR: tidak ada Python 3.11+ dengan pip. Install Python dulu.")
+        msg = "tidak ada Python 3.11+ dengan pip. Install Python 3.12+ dulu."
+        setup_append_log(f"ERROR: {msg}")
+        _setup["last_error"] = msg
         return False
+    setup_append_log(f"[{tag}] mulai — memakai: {' '.join(cands[0])}")
     up = await asyncio.to_thread(
         lambda: subprocess.run(cands[0] + ["install", "--upgrade", "pip"],
                                capture_output=True, timeout=300)
     )
-    setup_append_log(f"[{tag}] pip upgrade exit={up.returncode}")
+    setup_append_log(f"[{tag}] pip upgrade exit={up.returncode} (wajar lama, tunggu)")
     cmd = cands[0] + ["install", "--user", *packages]
     setup_append_log(f"[{tag}] RUN: {' '.join(cmd)}")
+    setup_append_log(f"[{tag}] mengunduh ±500MB-2GB, JANGAN tutup app...")
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
@@ -500,11 +505,15 @@ async def run_pip_install(packages: list[str], tag: str) -> bool:
     await proc.wait()
     ok = proc.returncode == 0
     setup_append_log(f"[{tag}] {'OK' if ok else f'ERROR exit={proc.returncode}'}")
+    if not ok:
+        _setup["last_error"] = f"pip exit={proc.returncode} (lihat log)"
     return ok
 
 
 async def do_install_key(key: str) -> None:
     _setup["installing"] = key
+    _setup["last_error"] = ""
+    setup_append_log(f"== mulai install {key} ==")
     try:
         STORAGE.mkdir(parents=True, exist_ok=True)
         if key == "cli":
@@ -560,6 +569,7 @@ async def do_install_key(key: str) -> None:
                 setup_append_log("ERROR: install Python otomatis tidak didukung di sini. "
                                  "Download manual: https://www.python.org/downloads/")
     except Exception as e:  # noqa: BLE001
+        _setup["last_error"] = str(e)[-300:]
         setup_append_log(f"ERROR: {e}")
     finally:
         refresh_scripts_cache()

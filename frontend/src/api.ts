@@ -67,6 +67,7 @@ export interface SetupItem {
 export interface SetupStatus {
   ready: boolean
   installing: string | null
+  last_error: string
   items: SetupItem[]
   log: string
 }
