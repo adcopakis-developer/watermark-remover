@@ -122,6 +122,35 @@ async def gpu_status():
     return info
 
 
+async def run_cli(args: list[str], timeout: int = 3600) -> dict:
+    binary = resolve_cli() or RAIW_BIN
+    env = None
+    ffmpeg_dir = ffmpeg_exe_dir()
+    if ffmpeg_dir:
+        env = {**os.environ, "PATH": f"{ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            binary,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    except FileNotFoundError:
+        return {"code": 127, "stdout": "", "stderr": "binary tidak ditemukan", "timed_out": False}
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        return {
+            "code": proc.returncode or 0,
+            "stdout": out.decode(errors="replace")[-8000:],
+            "stderr": err.decode(errors="replace")[-8000:],
+            "timed_out": False,
+        }
+    except asyncio.TimeoutError:
+        proc.kill()
+        return {"code": 1, "stdout": "", "stderr": "timeout", "timed_out": True}
+
+
 SETUP_LOG = STORAGE / "_setup.log"
 _setup = {"installing": False}
 
@@ -173,15 +202,40 @@ def ffmpeg_exe_dir() -> Optional[str]:
     return None
 
 
+def py_version_ok(interp: str) -> bool:
+    """True bila interpreter Python >= 3.11 (syarat remove-ai-watermarks)."""
+    try:
+        r = subprocess.run(
+            [interp, "-c", "import sys;print(sys.version_info[0]*100+sys.version_info[1])"],
+            capture_output=True, timeout=30, check=True,
+        )
+        return int(r.stdout.decode().strip()) >= 311
+    except Exception:
+        return False
+
+
 def pip_candidates() -> list[list[str]]:
-    """Base command pip yang valid: venv dulu, lalu sistem."""
+    """Base command pip yang valid + Python >= 3.11. Urutan: venv,
+    python3.11-3.14 eksplisit, python3, pip3. Python tua (Xcode/dll) dilewat."""
     ok: list[list[str]] = []
-    for base in ([sys.executable, "-m", "pip"], ["python3", "-m", "pip"], ["pip3"]):
+    interps = [sys.executable, "python3.14", "python3.13", "python3.12", "python3.11", "python3"]
+    for interp in interps:
+        base = [interp, "-m", "pip"]
         try:
             subprocess.run(base + ["--version"], capture_output=True, timeout=30, check=True)
-            ok.append(base)
         except Exception:
-            pass
+            continue
+        if py_version_ok(interp):
+            ok.append(base)
+    try:
+        r = subprocess.run(["pip3", "--version"], capture_output=True, timeout=30, check=True)
+        import re
+
+        m = re.search(r"python (\d+)\.(\d+)", r.stdout.decode())
+        if m and int(m.group(1)) * 100 + int(m.group(2)) >= 311:
+            ok.append(["pip3"])
+    except Exception:
+        pass
     return ok
 
 
@@ -221,8 +275,18 @@ async def do_install() -> None:
             SETUP_LOG.unlink()
         cands = await asyncio.to_thread(pip_candidates)
         if not cands:
-            setup_append_log("ERROR: pip tidak ditemukan (coba install python3 + pip).")
+            setup_append_log(
+                "ERROR: tidak ada Python 3.11+ dengan pip di mesin ini. "
+                "Install Python 3.12+ dari python.org (centang 'Add to PATH'), "
+                "lalu klik Install lagi."
+            )
             return
+        # Upgrade pip dulu agar tidak gagal resolve dependency modern.
+        up = await asyncio.to_thread(
+            lambda: subprocess.run(cands[0] + ["install", "--upgrade", "pip"],
+                                   capture_output=True, timeout=300)
+        )
+        setup_append_log(f"pip upgrade exit={up.returncode}")
         extra = "remove-ai-watermarks[video,diffusion]" if sys.platform == "win32" else "remove-ai-watermarks[video]"
         cmd = cands[0] + ["install", "--user", extra, "imageio-ffmpeg"]
         setup_append_log("RUN: " + " ".join(cmd))
