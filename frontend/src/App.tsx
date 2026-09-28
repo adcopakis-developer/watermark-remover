@@ -37,6 +37,7 @@ export default function App() {
   const [setupItems, setSetupItems] = useState<SetupItem[]>([])
   const [setupLog, setSetupLog] = useState('')
   const [setupLogOpen, setSetupLogOpen] = useState(false)
+  const [setupError, setSetupError] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -76,8 +77,14 @@ export default function App() {
       .then((s) => {
         setSetupItems(s.items)
         setSetupLog(s.log)
+        setSetupError(false)
       })
-      .catch(() => setSetupItems([]))
+      .catch(() => {
+        // Backend tidak merespons (belum jalan / crash / port dipakai
+        // proses zombie). Jangan macet di "Memeriksa...".
+        setSetupItems([])
+        setSetupError(true)
+      })
     void api
       .settings()
       .then((s) => {
@@ -248,7 +255,30 @@ export default function App() {
     <div className="wrap">
       <div className="card">
         <h2>Library Pendukung</h2>
-        {setupItems.length === 0 && (
+        {setupError && (
+          <div className="warnbox">
+            Backend tidak merespons. Kemungkinan: aplikasi dibuka dua kali (proses lama masih
+            jalan) atau backend crash. Tutup semua jendela app, pastikan tidak ada proses
+            <code>watermark-server</code> tersisa, lalu buka lagi.
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button
+                onClick={() => {
+                  setSetupError(false)
+                  void api
+                    .setup()
+                    .then((s) => {
+                      setSetupItems(s.items)
+                      setSetupLog(s.log)
+                    })
+                    .catch(() => setSetupError(true))
+                }}
+              >
+                Coba Lagi
+              </button>
+            </div>
+          </div>
+        )}
+        {!setupError && setupItems.length === 0 && (
           <div className="muted">Memeriksa OS dan library...</div>
         )}
         {setupItems.map((item) => (

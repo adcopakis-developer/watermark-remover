@@ -68,6 +68,14 @@ function startBackend() {
       env: buildBackendEnv(),
       windowsHide: true,
     });
+    try {
+      const logPath = path.join(app.getPath('userData'), 'backend.log');
+      const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+      backendProc.stdout?.pipe(logStream);
+      backendProc.stderr?.pipe(logStream);
+    } catch {
+      /* abaikan */
+    }
     backendProc.on('error', (err) => {
       dialog.showErrorBox('Backend gagal jalan', String((err && err.message) || err));
     });
@@ -114,6 +122,12 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Satu instance saja: uninstall macOS tidak mematikan proses lama,
+  // tanpa ini backend zombie memegang port dan instance baru buta.
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return;
+  }
   ipcMain.handle('select-folder', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],

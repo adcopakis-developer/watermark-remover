@@ -25,6 +25,7 @@ from typing import Optional
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 
 RAIW_BIN = os.environ.get("RAIW_BIN", "").strip() or "remove-ai-watermarks"
 STORAGE = Path(os.environ.get("STORAGE_DIR", "./storage")).resolve()
@@ -37,9 +38,30 @@ MAX_BYTES = 500 * 1024 * 1024
 MODES = ("visible", "metadata", "all", "invisible")
 MARKS = ("auto", "sora", "veo", "seedance", "doubao", "dola", "hailuo", "kling")
 
-app = FastAPI(title="watermark-remover")
+app = FastAPI(title="watermark-remover", lifespan=None)
 
 APP_VERSION = "1.1.0"
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    # Rotasi log tiap start: log basi (mis. error versi lama) tidak
+    # membingungkan panel. Riwayat pindah ke _setup.prev.log.
+    try:
+        STORAGE.mkdir(parents=True, exist_ok=True)
+        if SETUP_LOG.exists() and SETUP_LOG.stat().st_size > 0:
+            prev = STORAGE / "_setup.prev.log"
+            if prev.exists():
+                prev.unlink()
+            SETUP_LOG.rename(prev)
+        with open(SETUP_LOG, "a") as f:
+            f.write(f"[{now_wib()}] backend v{APP_VERSION} start\n")
+    except Exception:
+        pass
+    yield
+
+
+app.router.lifespan_context = lifespan
 
 
 @app.get("/api/meta")
