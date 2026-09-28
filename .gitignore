@@ -10,3 +10,4 @@ storage/
 .DS_Store
 packaging/build/
 packaging/dist/
+*.tsbuildinfo
