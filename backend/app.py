@@ -1,12 +1,10 @@
 """Standalone backend: upload video + hapus watermark via CLI remove-ai-watermarks.
 
-Jalan di mesin bergPU (tanpa login). Frontend Vite memanggil /api/*.
-Install: pip install -r requirements.txt
-         + pip install "remove-ai-watermarks[video]"        (CPU: visible+metadata)
-         + pip install "remove-ai-watermarks[video,diffusion]" (GPU: + invisible)
-         + ffmpeg di PATH
+Jalan di mesin lokal. Frontend Vite memanggil /api/*.
+Require: `remove-ai-watermarks` (pip) + `ffmpeg` di PATH, atau path manual
+di /api/settings (UI punya input).
 Run: uvicorn app:app --host 127.0.0.1 --port 8000
-Env: RAIW_BIN (default: remove-ai-watermarks), STORAGE_DIR (default: ./storage)
+Env: STORAGE_DIR (default: ./storage)
 """
 
 import asyncio
@@ -16,7 +14,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -25,9 +22,7 @@ from typing import Optional
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from contextlib import asynccontextmanager
 
-RAIW_BIN = os.environ.get("RAIW_BIN", "").strip() or "remove-ai-watermarks"
 STORAGE = Path(os.environ.get("STORAGE_DIR", "./storage")).resolve()
 STORE_FILE = STORAGE / "_store.json"
 SETTINGS_FILE = STORAGE / "_settings.json"
@@ -35,33 +30,9 @@ WIB = timezone(timedelta(hours=7))
 
 ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"}
 MAX_BYTES = 500 * 1024 * 1024
-MODES = ("visible", "metadata", "all", "invisible")
-MARKS = ("auto", "sora", "veo", "seedance", "doubao", "dola", "hailuo", "kling")
-
-app = FastAPI(title="watermark-remover", lifespan=None)
-
 APP_VERSION = "1.1.0"
 
-
-@asynccontextmanager
-async def lifespan(app_instance: FastAPI):
-    # Rotasi log tiap start: log basi (mis. error versi lama) tidak
-    # membingungkan panel. Riwayat pindah ke _setup.prev.log.
-    try:
-        STORAGE.mkdir(parents=True, exist_ok=True)
-        if SETUP_LOG.exists() and SETUP_LOG.stat().st_size > 0:
-            prev = STORAGE / "_setup.prev.log"
-            if prev.exists():
-                prev.unlink()
-            SETUP_LOG.rename(prev)
-        with open(SETUP_LOG, "a") as f:
-            f.write(f"[{now_wib()}] backend v{APP_VERSION} start\n")
-    except Exception:
-        pass
-    yield
-
-
-app.router.lifespan_context = lifespan
+app = FastAPI(title="watermark-remover")
 
 
 @app.get("/api/meta")
@@ -116,15 +87,22 @@ def default_output_root() -> str:
         return str(fallback)
 
 
+def default_settings() -> dict:
+    return {"output_root": default_output_root(), "cli_path": "", "ffmpeg_path": ""}
+
+
 def load_settings() -> dict:
+    base = default_settings()
     try:
         if SETTINGS_FILE.exists():
             data = json.loads(SETTINGS_FILE.read_text())
-            if isinstance(data, dict) and data.get("output_root"):
-                return data
+            if isinstance(data, dict):
+                for k in base:
+                    if isinstance(data.get(k), str):
+                        base[k] = data[k]
     except Exception:
         pass
-    return {"output_root": default_output_root()}
+    return base
 
 
 def save_settings(data: dict) -> None:
@@ -140,8 +118,35 @@ def sanitize_stem(name: str) -> str:
     return clean or "video"
 
 
+def is_executable_file(p: Path) -> bool:
+    return p.is_file() and os.access(p, os.X_OK)
+
+
+def resolve_cli_path() -> Optional[str]:
+    """User override > shutil.which. Tidak ada fallback lain."""
+    s = load_settings()
+    override = (s.get("cli_path") or "").strip()
+    if override and is_executable_file(Path(override).expanduser()):
+        return str(Path(override).expanduser().resolve())
+    name = "remove-ai-watermarks.exe" if os.name == "nt" else "remove-ai-watermarks"
+    found = shutil.which(name)
+    return found
+
+
+def ffmpeg_exe_dir() -> Optional[str]:
+    """Dir ffmpeg: user override > shutil.which."""
+    s = load_settings()
+    override = (s.get("ffmpeg_path") or "").strip()
+    if override and is_executable_file(Path(override).expanduser()):
+        return str(Path(override).expanduser().resolve().parent)
+    found = shutil.which("ffmpeg")
+    return str(Path(found).parent) if found else None
+
+
 class SettingsBody(BaseModel):
     output_root: str
+    cli_path: str = ""
+    ffmpeg_path: str = ""
 
 
 @app.get("/api/settings")
@@ -161,53 +166,48 @@ def put_settings(body: SettingsBody):
         probe.unlink()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Folder tidak bisa ditulis: {e}")
-    data = {"output_root": str(root)}
-    save_settings(data)
-    return data
+    for key, val in (("cli_path", body.cli_path), ("ffmpeg_path", body.ffmpeg_path)):
+        v = (val or "").strip()
+        if not v:
+            continue
+        p = Path(v).expanduser()
+        if not is_executable_file(p):
+            raise HTTPException(400, f"{key} tidak ditemukan / tidak bisa dieksekusi: {v}")
+    save_settings({
+        "output_root": str(root),
+        "cli_path": body.cli_path.strip(),
+        "ffmpeg_path": body.ffmpeg_path.strip(),
+    })
+    return load_settings()
 
 
-class CleanBody(BaseModel):
-    # Diabaikan: Electron selalu full-clean (visible + invisible + metadata)
-    # memakai GPU lokal. Field dijaga agar request lama tetap valid.
-    mode: str = "all"
-    mark: str = "auto"
+@app.get("/api/setup/status")
+def setup_status():
+    cli = resolve_cli_path()
+    ffmpeg = ffmpeg_exe_dir()
+    return {
+        "ready": bool(cli and ffmpeg),
+        "cli": {"installed": bool(cli), "path": cli or ""},
+        "ffmpeg": {"installed": bool(ffmpeg), "path": ffmpeg or ""},
+    }
+
+
+def has_cuda_sync() -> bool:
+    """Cek cepat GPU NVIDIA. nvidia-smi = cukup, tanpa import torch."""
+    return bool(shutil.which("nvidia-smi"))
 
 
 @app.get("/api/gpu")
 async def gpu_status():
-    """Cek GPU lokal (NVIDIA/CUDA) untuk invisible removal."""
-    info = {"cuda": False, "detail": "GPU tidak terdeteksi"}
-    nvidia_smi = shutil.which("nvidia-smi")
-    if nvidia_smi:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                nvidia_smi, "-L",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            out, _ = await asyncio.wait_for(proc.communicate(), 15)
-            text = out.decode(errors="replace").strip()
-            if text:
-                info = {"cuda": True, "detail": text.splitlines()[0][:200]}
-        except Exception:
-            pass
-    if not info["cuda"]:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-c", "import torch;print(torch.cuda.is_available())",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            out, _ = await asyncio.wait_for(proc.communicate(), 60)
-            if out.decode().strip() == "True":
-                info = {"cuda": True, "detail": "torch.cuda tersedia"}
-        except Exception:
-            pass
-    return info
+    if await asyncio.to_thread(has_cuda_sync):
+        return {"cuda": True, "detail": "GPU NVIDIA terdeteksi"}
+    return {"cuda": False, "detail": "GPU tidak terdeteksi"}
 
 
 async def run_cli(args: list[str], timeout: int = 3600) -> dict:
-    binary = resolve_cli() or RAIW_BIN
+    binary = resolve_cli_path()
+    if not binary:
+        return {"code": 127, "stdout": "", "stderr": "binary tidak ditemukan", "timed_out": False}
     env = None
     ffmpeg_dir = ffmpeg_exe_dir()
     if ffmpeg_dir:
@@ -233,376 +233,6 @@ async def run_cli(args: list[str], timeout: int = 3600) -> dict:
     except asyncio.TimeoutError:
         proc.kill()
         return {"code": 1, "stdout": "", "stderr": "timeout", "timed_out": True}
-
-
-SETUP_LOG = STORAGE / "_setup.log"
-_setup: dict = {"installing": None, "last_error": ""}  # installing: None | key
-_memlog: list[str] = []  # ring buffer: anti file hilang/rotasi/proses ganda
-
-
-def user_site_bins() -> list[str]:
-    """Lokasi binary pip --user: tebakan statis + tanya tiap interpreter
-    (sysconfig, di-cache 120 dtk agar polling status tetap cepat)."""
-    return _user_site_bins_cached()
-
-
-_scripts_cache: dict = {"at": 0.0, "dirs": []}
-
-
-def _user_site_bins_cached() -> list[str]:
-    import time as _time
-
-    if _time.time() - _scripts_cache["at"] < 120 and _scripts_cache["dirs"]:
-        return list(_scripts_cache["dirs"])
-    dirs: list[str] = [str(Path.home() / ".local" / "bin")]
-    if sys.platform == "darwin":
-        for vers in ("3.14", "3.13", "3.12", "3.11"):
-            dirs.append(str(Path.home() / "Library" / "Python" / vers / "bin"))
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", "")
-        if appdata:
-            for vers in ("313", "312", "311"):
-                dirs.append(str(Path(appdata) / "Python" / f"Python{vers}" / "Scripts"))
-    schemes = ["posix_user"] if sys.platform != "win32" else ["nt_user"]
-    for interp in (sys.executable, "python3.14", "python3.13", "python3.12", "python3.11", "python3"):
-        for scheme in schemes:
-            try:
-                r = subprocess.run(
-                    [interp, "-c",
-                     f"import sysconfig;print(sysconfig.get_path('scripts', scheme='{scheme}'))"],
-                    capture_output=True, timeout=30,
-                )
-                if r.returncode == 0:
-                    d = r.stdout.decode().strip()
-                    if d and d not in dirs:
-                        dirs.append(d)
-            except Exception:
-                pass
-    _scripts_cache["at"] = _time.time()
-    _scripts_cache["dirs"] = dirs
-    return list(dirs)
-
-
-def refresh_scripts_cache() -> None:
-    _scripts_cache["at"] = 0.0
-    _scripts_cache["dirs"] = []
-
-
-def resolve_cli() -> Optional[str]:
-    """Cari binary remove-ai-watermarks: env, venv, user-site, PATH."""
-    suffix = ".exe" if os.name == "nt" else ""
-    name = f"remove-ai-watermarks{suffix}"
-    cands = []
-    if RAIW_BIN != "remove-ai-watermarks":
-        cands.append(RAIW_BIN)
-    cands.append(str(Path(sys.executable).parent / name))
-    cands.extend(str(Path(d) / name) for d in user_site_bins())
-    found = shutil.which(name)
-    if found:
-        cands.append(found)
-    for c in cands:
-        if c and Path(c).exists():
-            return c
-    return None
-
-
-def frozen_ffmpeg_dir() -> Optional[str]:
-    """ffmpeg bawaan bundle PyInstaller (onedir): cari ffmpeg* di sebelah exe."""
-    if not getattr(sys, "frozen", False):
-        return None
-    roots = [
-        Path(sys.executable).parent / "_internal" / "imageio_ffmpeg" / "binaries",
-        Path(sys.executable).parent / "imageio_ffmpeg" / "binaries",
-    ]
-    for d in roots:
-        if not d.is_dir():
-            continue
-        for f in sorted(d.iterdir()):
-            if not f.is_file():
-                continue
-            if f.name.startswith("ffmpeg") or f.suffix == ".exe":
-                try:
-                    if not os.access(f, os.X_OK):
-                        os.chmod(f, 0o755)
-                except Exception:
-                    pass
-                return str(d)
-    return None
-
-
-def ffmpeg_exe_dir() -> Optional[str]:
-    """Dir ffmpeg: PATH, lalu bundle frozen, lalu import imageio-ffmpeg."""
-    found = shutil.which("ffmpeg")
-    if found:
-        return str(Path(found).parent)
-    frozen = frozen_ffmpeg_dir()
-    if frozen:
-        return frozen
-    try:
-        import imageio_ffmpeg  # type: ignore
-
-        exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
-        if exe.exists():
-            return str(exe.parent)
-    except Exception:
-        pass
-    return None
-
-
-def py_version_ok(interp: str) -> bool:
-    """True bila interpreter Python >= 3.11 (syarat remove-ai-watermarks)."""
-    try:
-        r = subprocess.run(
-            [interp, "-c", "import sys;print(sys.version_info[0]*100+sys.version_info[1])"],
-            capture_output=True, timeout=30, check=True,
-        )
-        return int(r.stdout.decode().strip()) >= 311
-    except Exception:
-        return False
-
-
-_pip_cache: dict = {"at": 0.0, "cands": []}
-
-
-def pip_candidates() -> list[list[str]]:
-    """Base command pip yang valid + Python >= 3.11. Urutan: venv,
-    python3.11-3.14 eksplisit, python3, pip3. Python tua (Xcode/dll) dilewat.
-    Di-cache 120 dtk (masing-masing spawn subprocess)."""
-    import time as _time
-
-    if _time.time() - _pip_cache["at"] < 120 and _pip_cache["cands"]:
-        return list(_pip_cache["cands"])
-    ok: list[list[str]] = []
-    interps = [sys.executable, "python3.14", "python3.13", "python3.12", "python3.11", "python3"]
-    for interp in interps:
-        base = [interp, "-m", "pip"]
-        try:
-            subprocess.run(base + ["--version"], capture_output=True, timeout=30, check=True)
-        except Exception:
-            continue
-        if py_version_ok(interp):
-            ok.append(base)
-    try:
-        r = subprocess.run(["pip3", "--version"], capture_output=True, timeout=30, check=True)
-        import re
-
-        m = re.search(r"python (\d+)\.(\d+)", r.stdout.decode())
-        if m and int(m.group(1)) * 100 + int(m.group(2)) >= 311:
-            ok.append(["pip3"])
-    except Exception:
-        pass
-    import time as _time2
-
-    _pip_cache["at"] = _time2.time()
-    _pip_cache["cands"] = ok
-    return ok
-
-
-def setup_append_log(text: str) -> None:
-    line = f"[{now_wib()}] {text}"
-    _memlog.append(line)
-    del _memlog[:-50]
-    try:
-        STORAGE.mkdir(parents=True, exist_ok=True)
-        with open(SETUP_LOG, "a") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
-
-
-def setup_read_log() -> str:
-    # Memory dulu (kebal rotasi file & beda proses), fallback ke file.
-    if _memlog:
-        return "\n".join(_memlog[-30:])
-    try:
-        if SETUP_LOG.exists():
-            return "\n".join(SETUP_LOG.read_text().splitlines()[-30:])
-    except Exception:
-        pass
-    return ""
-
-
-@app.get("/api/setup/status")
-def setup_status():
-    cli = resolve_cli()
-    ffmpeg = ffmpeg_exe_dir() is not None
-    pips = pip_candidates()
-    python_ok = len(pips) > 0
-    cuda = False
-    try:
-        cuda = bool(shutil.which("nvidia-smi"))
-    except Exception:
-        pass
-    log = setup_read_log()
-    items = [
-        {
-            "key": "python",
-            "label": "Python ≥3.11 + pip",
-            "required": True,
-            "installed": python_ok,
-            "detail": f"{pips[0][0]}" if python_ok else "tidak ditemukan",
-            "installing": _setup["installing"] == "python",
-        },        {
-            "key": "cli",
-            "label": "remove-ai-watermarks (+ffmpeg bila perlu)",
-            "required": True,
-            "installed": bool(cli),
-            "detail": cli or "belum terinstall",
-            "installing": _setup["installing"] == "cli",
-        },
-        {
-            "key": "ffmpeg",
-            "label": "FFmpeg",
-            "required": True,
-            "installed": ffmpeg,
-            "detail": "tersedia" if ffmpeg else "belum ada",
-            "installing": _setup["installing"] == "ffmpeg",
-        },
-        {
-            "key": "cuda",
-            "label": "NVIDIA CUDA (untuk invisible)",
-            "required": False,
-            "installed": cuda,
-            "detail": "terdeteksi" if cuda else "tidak ada — fallback CPU otomatis",
-            "installing": False,
-        },
-    ]
-    resp: dict = {
-        "ready": bool(cli and ffmpeg),
-        "installing": _setup["installing"],
-        "last_error": _setup.get("last_error", ""),
-        "items": items,
-        "log": log,
-    }
-    if os.environ.get("VW_DEBUG") == "1":
-        exe = sys.executable
-        probe = str(Path(exe).parent / "_internal" / "imageio_ffmpeg" / "binaries")
-        try:
-            listing = sorted(os.listdir(probe))
-        except Exception as e:  # noqa: BLE001
-            listing = [f"LIST_FAIL: {e}"]
-        resp["_debug"] = {
-            "frozen": getattr(sys, "frozen", False),
-            "executable": exe,
-            "probe": probe,
-            "listing": listing,
-        }
-    return resp
-
-
-async def run_pip_install(packages: list[str], tag: str) -> bool:
-    """pip install --user paket; True bila sukses. Log ke SETUP_LOG."""
-    cands = await asyncio.to_thread(pip_candidates)
-    if not cands:
-        msg = "tidak ada Python 3.11+ dengan pip. Install Python 3.12+ dulu."
-        setup_append_log(f"ERROR: {msg}")
-        _setup["last_error"] = msg
-        return False
-    setup_append_log(f"[{tag}] mulai — memakai: {' '.join(cands[0])}")
-    up = await asyncio.to_thread(
-        lambda: subprocess.run(cands[0] + ["install", "--upgrade", "pip"],
-                               capture_output=True, timeout=300)
-    )
-    setup_append_log(f"[{tag}] pip upgrade exit={up.returncode} (wajar lama, tunggu)")
-    cmd = cands[0] + ["install", "--user", *packages]
-    setup_append_log(f"[{tag}] RUN: {' '.join(cmd)}")
-    setup_append_log(f"[{tag}] mengunduh ±500MB-2GB, JANGAN tutup app...")
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-    )
-    assert proc.stdout is not None
-    tail: list[str] = []
-    async for raw in proc.stdout:
-        line = raw.decode(errors="replace").rstrip()[-400:]
-        tail.append(line)
-        tail = tail[-8:]
-        setup_append_log(f"[{tag}] " + line)
-    await proc.wait()
-    ok = proc.returncode == 0
-    setup_append_log(f"[{tag}] {'OK' if ok else f'ERROR exit={proc.returncode}'}")
-    if not ok:
-        hint = " ".join(tail[-3:])[-300:]
-        _setup["last_error"] = f"pip exit={proc.returncode}: {hint or '(lihat log)'}"
-    return ok
-
-
-async def do_install_key(key: str) -> None:
-    _setup["installing"] = key
-    _setup["last_error"] = ""
-    setup_append_log(f"== mulai install {key} ==")
-    try:
-        STORAGE.mkdir(parents=True, exist_ok=True)
-        if key == "cli":
-            extra = "remove-ai-watermarks[video,diffusion]" if sys.platform == "win32" else "remove-ai-watermarks[video]"
-            if await run_pip_install([extra, "imageio-ffmpeg"], "cli"):
-                # Refresh cache agar binary yang baru terinstall langsung ketemu,
-                # lalu VERIFIKASI bisa dieksekusi (bukan sekadar file ada).
-                refresh_scripts_cache()
-                cli = await asyncio.to_thread(resolve_cli)
-                if cli:
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
-                            cli, "--version",
-                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                        )
-                        out, _ = await asyncio.wait_for(proc.communicate(), 60)
-                        setup_append_log(f"OK: CLI -> {cli} ({out.decode(errors='replace').strip()[:120]})")
-                    except Exception as e:  # noqa: BLE001
-                        setup_append_log(f"WARN: binary ada tapi gagal jalan: {cli} ({e})")
-                else:
-                    searched = await asyncio.to_thread(_user_site_bins_cached)
-                    setup_append_log(
-                        "WARN: pip sukses tapi binary tidak ketemu. Dicari di: "
-                        + ", ".join(searched)
-                    )
-        elif key == "ffmpeg":
-            await run_pip_install(["imageio-ffmpeg"], "ffmpeg")
-        elif key == "python":
-            if sys.platform == "darwin" and shutil.which("brew"):
-                setup_append_log("[python] RUN: brew install python@3.12")
-                proc = await asyncio.create_subprocess_exec(
-                    "brew", "install", "python@3.12",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                )
-                assert proc.stdout is not None
-                async for raw in proc.stdout:
-                    setup_append_log("[python] " + raw.decode(errors="replace").rstrip()[-400:])
-                await proc.wait()
-                setup_append_log(f"[python] exit={proc.returncode}")
-            elif sys.platform == "win32" and shutil.which("winget"):
-                setup_append_log("[python] RUN: winget install Python.3.12")
-                proc = await asyncio.create_subprocess_exec(
-                    "winget", "install", "-e", "--id", "Python.3.12",
-                    "--accept-package-agreements", "--accept-source-agreements",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                )
-                assert proc.stdout is not None
-                async for raw in proc.stdout:
-                    setup_append_log("[python] " + raw.decode(errors="replace").rstrip()[-400:])
-                await proc.wait()
-                setup_append_log(f"[python] exit={proc.returncode}")
-            else:
-                setup_append_log("ERROR: install Python otomatis tidak didukung di sini. "
-                                 "Download manual: https://www.python.org/downloads/")
-    except Exception as e:  # noqa: BLE001
-        _setup["last_error"] = str(e)[-300:]
-        setup_append_log(f"ERROR: {e}")
-    finally:
-        refresh_scripts_cache()
-        _pip_cache["at"] = 0.0
-        _pip_cache["cands"] = []
-        _setup["installing"] = None
-
-
-@app.post("/api/setup/install/{key}")
-async def setup_install_key(key: str, bg: BackgroundTasks):
-    if key not in ("python", "cli", "ffmpeg"):
-        raise HTTPException(400, "key harus python|cli|ffmpeg")
-    if _setup["installing"]:
-        return {"installing": _setup["installing"]}
-    bg.add_task(do_install_key, key)
-    _setup["installing"] = key
-    return {"installing": key}
 
 
 @app.get("/api/videos")
@@ -759,20 +389,6 @@ def build_args(mode: str, mark: str, src: str, out: str) -> list[str]:
     return args
 
 
-def has_cuda_sync() -> bool:
-    """Cek cepat GPU NVIDIA (tanpa load torch)."""
-    if shutil.which("nvidia-smi"):
-        return True
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "import torch;print(torch.cuda.is_available())"],
-            capture_output=True, timeout=60,
-        )
-        return r.returncode == 0 and r.stdout.decode().strip() == "True"
-    except Exception:
-        return False
-
-
 INVISIBLE_WARN = (
     "Tidak full-clean: invisible watermark (pixel SynthID) DILEWATI "
     "karena GPU NVIDIA/CUDA tidak terdeteksi. "
@@ -796,11 +412,9 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
             res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
             err_low = (res["stderr"] or "").lower()
             if res["code"] != 0 and ("cuda" in err_low or "diffusion" in err_low):
-                # CUDA ada tapi extra diffusion hilang: fallback CPU.
                 res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
                 warnings.append(INVISIBLE_WARN + " (extra diffusion tidak terinstall)")
         else:
-            # Hemat: langsung CPU tanpa mencoba profil CUDA yang pasti gagal.
             res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
             if ext in (".mp4", ".mov", ".m4v"):
                 warnings.append(INVISIBLE_WARN)
@@ -818,8 +432,6 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
                 updated_at=now_wib(),
             )
         else:
-            # Hasil: {output_root}/{folder-datetime}/{nama}_clean_{fully|partially}{ext}.
-            # Folder grup bulk = batch_name; upload satuan = stamp baru.
             settings = load_settings()
             root = Path(settings["output_root"])
             root.mkdir(parents=True, exist_ok=True)
@@ -855,7 +467,9 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
 
 
 @app.post("/api/videos/{vid}/clean")
-async def clean_video(vid: str, body: CleanBody, bg: BackgroundTasks):
+async def clean_video(vid: str, body: dict, bg: BackgroundTasks):
+    if not resolve_cli_path():
+        raise HTTPException(400, "remove-ai-watermarks belum ditemukan. Isi path di Library Pendukung.")
     rows = load_store()
     rec = find_rec(rows, vid)
     if not rec:
@@ -863,14 +477,27 @@ async def clean_video(vid: str, body: CleanBody, bg: BackgroundTasks):
     if rec["status"] == "processing":
         raise HTTPException(400, "Masih diproses, tunggu selesai.")
     rec.update(mode="all", mark="auto", status="processing",
-               error=None, report="Diproses full-clean (GPU)...", updated_at=now_wib())
+               error=None, report="Diproses full-clean...", updated_at=now_wib())
     save_store(rows)
     bg.add_task(run_clean, vid, "all", "auto")
     return {"data": rec}
 
 
-async def run_batch_clean(batch_id: str) -> None:
-    """Bersihkan semua video grup yang belum done, berurutan."""
+@app.post("/api/batches/{batch_id}/clean-all")
+async def clean_batch(batch_id: str, bg: BackgroundTasks):
+    if not resolve_cli_path():
+        raise HTTPException(400, "remove-ai-watermarks belum ditemukan. Isi path di Library Pendukung.")
+    rows = load_store()
+    vids = [r for r in rows if r.get("batch_id") == batch_id]
+    if not vids:
+        raise HTTPException(404, "Batch tidak ditemukan")
+    if any(r.get("status") == "processing" for r in vids):
+        raise HTTPException(400, "Batch masih diproses, tunggu selesai.")
+    bg.add_task(_run_batch, batch_id)
+    return {"data": {"batch_id": batch_id, "queued": len(vids)}}
+
+
+async def _run_batch(batch_id: str) -> None:
     rows = load_store()
     vids = [r["id"] for r in rows
             if r.get("batch_id") == batch_id and r.get("status") != "processing"]
@@ -880,21 +507,9 @@ async def run_batch_clean(batch_id: str) -> None:
         if not rec or rec.get("status") == "done":
             continue
         rec.update(mode="all", mark="auto", status="processing",
-                   error=None, report="Diproses full-clean (GPU)...", updated_at=now_wib())
+                   error=None, report="Diproses full-clean...", updated_at=now_wib())
         save_store(rows)
         await run_clean(vid, "all", "auto")
-
-
-@app.post("/api/batches/{batch_id}/clean-all")
-async def clean_batch(batch_id: str, bg: BackgroundTasks):
-    rows = load_store()
-    vids = [r for r in rows if r.get("batch_id") == batch_id]
-    if not vids:
-        raise HTTPException(404, "Batch tidak ditemukan")
-    if any(r.get("status") == "processing" for r in vids):
-        raise HTTPException(400, "Batch masih diproses, tunggu selesai.")
-    bg.add_task(run_batch_clean, batch_id)
-    return {"data": {"batch_id": batch_id, "queued": len(vids)}}
 
 
 def resolve_out(name: str) -> Path:
@@ -961,7 +576,6 @@ def delete_video(vid: str):
 
 
 if __name__ == "__main__":
-    # Dipakai saat dibundle PyInstaller menjadi watermark-server(.exe).
     import uvicorn
 
     port = int(os.environ.get("BACKEND_PORT", "8000"))

@@ -34,6 +34,18 @@ export interface VwBatch {
   videos: VwRecord[]
 }
 
+export interface VwSettings {
+  output_root: string
+  cli_path: string
+  ffmpeg_path: string
+}
+
+export interface VwSetup {
+  ready: boolean
+  cli: { installed: boolean; path: string }
+  ffmpeg: { installed: boolean; path: string }
+}
+
 // Di Electron packaged (file://) tidak ada proxy vite,
 // jadi API harus absolut ke backend lokal. Port sama dengan main.js.
 const API_BASE =
@@ -55,45 +67,18 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T
 }
 
-export interface SetupItem {
-  key: string
-  label: string
-  required: boolean
-  installed: boolean
-  detail: string
-  installing: boolean
-}
-
-export interface SetupStatus {
-  ready: boolean
-  installing: string | null
-  last_error: string
-  items: SetupItem[]
-  log: string
-}
-
 export const api = {
-  settings: () => req<{ output_root: string }>('/api/settings'),
-  saveSettings: (output_root: string) =>
-    req<{ output_root: string }>('/api/settings', {
+  meta: () => req<{ version: string; has_setup: boolean }>('/api/meta'),
+  gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
+  setup: () => req<VwSetup>('/api/setup/status'),
+  settings: () => req<VwSettings>('/api/settings'),
+  saveSettings: (body: VwSettings) =>
+    req<VwSettings>('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ output_root }),
+      body: JSON.stringify(body),
     }),
-  meta: () =>
-    req<{ version: string; has_setup: boolean }>('/api/meta').then((m) => ({
-      version: m.version ?? '?',
-      has_setup: m.has_setup ?? false,
-    })),
-  gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
-  setup: () =>
-    req<SetupStatus>('/api/setup/status').then((s) => ({
-      ...s,
-      items: s.items ?? [],
-      log: s.log ?? '',
-    })),
-  installKey: (key: string) =>
-    req<{ installing: string | null }>(`/api/setup/install/${key}`, { method: 'POST' }),
+
   batches: () =>
     req<{ data: VwBatch[] }>('/api/batches').then((r) =>
       (r.data ?? []).map((b) => ({ ...b, videos: b.videos ?? [] })),

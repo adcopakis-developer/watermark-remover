@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { VwBatch, VwRecord, SetupItem } from './api'
+import type { VwBatch, VwRecord, VwSettings, VwSetup } from './api'
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
   const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
   return `${(bytes / Math.pow(1024, exp)).toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`
-}
-
-function isBinaryError(text: string | null): boolean {
-  return !!text && /binary/i.test(text)
 }
 
 function formatBatchName(name: string): string {
@@ -30,15 +26,10 @@ export default function App() {
   const [openReport, setOpenReport] = useState<string | null>(null)
   const [gpu, setGpu] = useState<string | null>(null)
   const [gpuOk, setGpuOk] = useState<boolean | null>(null)
-  const [outputRoot, setOutputRoot] = useState('')
-  const [outputDraft, setOutputDraft] = useState('')
+  const [setup, setSetup] = useState<VwSetup | null>(null)
+  const [settings, setSettings] = useState<VwSettings | null>(null)
+  const [draft, setDraft] = useState<VwSettings | null>(null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
-  const [hasSetup, setHasSetup] = useState(true)
-  const [setupItems, setSetupItems] = useState<SetupItem[]>([])
-  const [setupLog, setSetupLog] = useState('')
-  const [setupLogOpen, setSetupLogOpen] = useState(false)
-  const [setupError, setSetupError] = useState(false)
-  const [lastInstallError, setLastInstallError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -56,101 +47,40 @@ export default function App() {
 
   useEffect(() => {
     void refresh()
-    void api
-      .meta()
-      .then((m) => {
-        setAppVersion(m.version)
-        setHasSetup(m.has_setup)
-      })
-      .catch(() => {
-        // Backend lama tanpa /api/meta (dmg sebelum auto-install).
-        setHasSetup(false)
-      })
-    void api
-      .gpu()
-      .then((g) => {
-        setGpuOk(g.cuda)
-        setGpu(g.cuda ? `GPU aktif: ${g.detail}` : `GPU tidak terdeteksi (${g.detail})`)
-      })
-      .catch(() => setGpu('Status GPU tidak diketahui'))
-    void api
-      .setup()
-      .then((s) => {
-        setSetupItems(s.items)
-        setSetupLog(s.log)
-        setSetupError(false)
-        setLastInstallError(s.last_error ?? '')
-      })
-      .catch(() => {
-        // Backend tidak merespons (belum jalan / crash / port dipakai
-        // proses zombie). Jangan macet di "Memeriksa...".
-        setSetupItems([])
-        setSetupError(true)
-      })
-    void api
-      .settings()
-      .then((s) => {
-        setOutputRoot(s.output_root)
-        setOutputDraft(s.output_root)
-      })
-      .catch(() => {})
+    void api.meta().then((m) => setAppVersion(m.version ?? '?')).catch(() => {})
+    void api.gpu().then((g) => {
+      setGpuOk(g.cuda)
+      setGpu(g.detail)
+    }).catch(() => setGpu('Status GPU tidak diketahui'))
+    void api.setup().then(setSetup).catch(() => setSetup(null))
+    void api.settings().then((s) => {
+      setSettings(s)
+      setDraft(s)
+    }).catch(() => {})
   }, [refresh])
 
-  const setupBusy = setupItems.some((i) => i.installing)
-
-  useEffect(() => {
-    if (setupItems.length === 0 && !setupBusy) return
-    if (!setupItems.some((i) => !i.installed || i.installing)) return
-    const t = window.setInterval(() => {
-      void api
-        .setup()
-        .then((s) => {
-          setSetupItems(s.items)
-          setSetupLog(s.log)
-          setLastInstallError(s.last_error ?? '')
-        })
-        .catch(() => {})
-    }, 3000)
-    return () => window.clearInterval(t)
-  }, [setupItems, setupBusy])
-
-  const handleSaveOutputRoot = useCallback(async () => {
-    const v = outputDraft.trim()
-    if (!v) {
-      setError('Folder hasil tidak boleh kosong')
-      return
-    }
-    setError(null)
+  const handleSaveSettings = useCallback(async () => {
+    if (!draft) return
     try {
-      const s = await api.saveSettings(v)
-      setOutputRoot(s.output_root)
-      setOutputDraft(s.output_root)
+      const s = await api.saveSettings(draft)
+      setSettings(s)
+      setDraft(s)
+      const sr = await api.setup()
+      setSetup(sr)
+      setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menyimpan folder')
+      setError(err instanceof Error ? err.message : 'Gagal menyimpan')
     }
-  }, [outputDraft])
+  }, [draft])
 
   const handlePickFolder = useCallback(async () => {
     try {
       const picked = await window.watermarkApp?.selectFolder?.()
-      if (picked) setOutputDraft(picked)
+      if (picked && draft) setDraft({ ...draft, output_root: picked })
     } catch {
       /* abaikan */
     }
-  }, [])
-
-  const handleInstallKey = useCallback(async (key: string) => {
-    setError(null)
-    try {
-      await api.installKey(key)
-      const s = await api.setup()
-      setSetupItems(s.items)
-      setSetupLog(s.log)
-      setSetupLogOpen(true)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal memulai instalasi')
-    }
-  }, [])
+  }, [draft])
 
   const anyProcessing = batches.some((b) => b.videos.some((v) => v.status === 'processing'))
 
@@ -198,6 +128,19 @@ export default function App() {
     )
   }, [])
 
+  const handleCleanAll = useCallback(async (batchId: string) => {
+    setBusyBatch(batchId)
+    setError(null)
+    try {
+      await api.cleanAll(batchId)
+      setBatches(await api.batches())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal memulai bulk clean')
+    } finally {
+      setBusyBatch(null)
+    }
+  }, [])
+
   const handleIdentify = useCallback(
     async (id: string) => {
       setBusyId(id)
@@ -214,19 +157,6 @@ export default function App() {
     },
     [patchVideo],
   )
-
-  const handleCleanAll = useCallback(async (batchId: string) => {
-    setBusyBatch(batchId)
-    setError(null)
-    try {
-      await api.cleanAll(batchId)
-      setBatches(await api.batches())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal memulai bulk clean')
-    } finally {
-      setBusyBatch(null)
-    }
-  }, [])
 
   const handleDelete = useCallback(async (id: string) => {
     if (!window.confirm('Hapus video ini dari storage?')) return
@@ -254,147 +184,132 @@ export default function App() {
     }
   }, [])
 
+  const ready = setup?.ready ?? false
+  const cliPath = draft?.cli_path ?? ''
+  const ffmpegPath = draft?.ffmpeg_path ?? ''
+  const outputRoot = draft?.output_root ?? ''
+  const activeRoot = settings?.output_root ?? ''
+
   return (
     <div className="wrap">
       <div className="card">
         <h2>Library Pendukung</h2>
-        {setupError && (
-          <div className="warnbox">
-            Backend tidak merespons. Kemungkinan: aplikasi dibuka dua kali (proses lama masih
-            jalan) atau backend crash. Tutup semua jendela app, pastikan tidak ada proses
-            <code>watermark-server</code> tersisa, lalu buka lagi.
-            <div className="actions" style={{ marginTop: 10 }}>
-              <button
-                onClick={() => {
-                  setSetupError(false)
-                  void api
-                    .setup()
-                    .then((s) => {
-                      setSetupItems(s.items)
-                      setSetupLog(s.log)
-                    })
-                    .catch(() => setSetupError(true))
-                }}
-              >
-                Coba Lagi
-              </button>
+        <table className="setup">
+          <tbody>
+            <tr>
+              <td>remove-ai-watermarks</td>
+              <td>
+                <span className={`dot ${setup?.cli.installed ? 'ok' : 'no'}`} />
+                <span className="path">{setup?.cli.path || 'tidak ditemukan'}</span>
+              </td>
+            </tr>
+            <tr>
+              <td>FFmpeg</td>
+              <td>
+                <span className={`dot ${setup?.ffmpeg.installed ? 'ok' : 'no'}`} />
+                <span className="path">{setup?.ffmpeg.path || 'tidak ditemukan'}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        {draft && (
+          <>
+            <div className="row">
+              <label className="field" style={{ flex: 1 }}>
+                Path remove-ai-watermarks (kosongkan untuk pakai PATH)
+                <input
+                  type="text"
+                  value={cliPath}
+                  onChange={(e) => setDraft({ ...draft, cli_path: e.target.value })}
+                  placeholder="/usr/local/bin/remove-ai-watermarks"
+                />
+              </label>
             </div>
-          </div>
-        )}
-        {!setupError && setupItems.length === 0 && (
-          <div className="muted">Memeriksa OS dan library...</div>
-        )}
-        {setupItems.map((item) => (
-          <div className="setup-row" key={item.key}>
-            <span
-              className="dot"
-              style={{ background: item.installed ? '#22c55e' : '#f59e0b' }}
-            />
-            <div className="setup-info">
-              <div>
-                {item.label}
-                {!item.required && <span className="muted"> (opsional)</span>}
-              </div>
-              <div className="muted">{item.installing ? 'Menginstall...' : item.detail}</div>
-              {!item.installed && lastInstallError && (
-                <div className="warnline">Install terakhir gagal: {lastInstallError}</div>
+            <div className="row">
+              <label className="field" style={{ flex: 1 }}>
+                Path FFmpeg (kosongkan untuk pakai PATH)
+                <input
+                  type="text"
+                  value={ffmpegPath}
+                  onChange={(e) => setDraft({ ...draft, ffmpeg_path: e.target.value })}
+                  placeholder="/opt/homebrew/bin/ffmpeg"
+                />
+              </label>
+            </div>
+            <div className="row">
+              <label className="field" style={{ flex: 1 }}>
+                Folder hasil
+                <input
+                  type="text"
+                  value={outputRoot}
+                  onChange={(e) => setDraft({ ...draft, output_root: e.target.value })}
+                />
+              </label>
+              {window.watermarkApp?.selectFolder && (
+                <button className="ghost" onClick={() => void handlePickFolder()}>
+                  Pilih...
+                </button>
               )}
             </div>
-            {!item.installed && item.key !== 'cuda' && (
-              <button
-                disabled={item.installing || setupBusy}
-                onClick={() => void handleInstallKey(item.key)}
-              >
-                {item.installing ? 'Installing...' : 'Install'}
-              </button>
+            <div className="actions">
+              <button onClick={() => void handleSaveSettings()}>Simpan</button>
+              {!ready && (
+                <span className="warnline">
+                  Simpan dulu bila tidak ada CLI/FFmpeg. Upload dinonaktifkan.
+                </span>
+              )}
+            </div>
+            {activeRoot && activeRoot !== outputRoot && (
+              <div className="muted">Aktif: {activeRoot}</div>
             )}
-          </div>
-        ))}
-        {setupLog && (
-          <div className="actions" style={{ marginTop: 10 }}>
-            <button className="ghost" onClick={() => setSetupLogOpen(!setupLogOpen)}>
-              {setupLogOpen ? 'Tutup Log' : 'Lihat Log Install'}
-            </button>
-          </div>
+          </>
         )}
-        {setupLogOpen && setupLog && <pre>{setupLog}</pre>}
       </div>
-      <div className="card">
-        <h2>Folder Hasil</h2>
-        <div className="muted">
-          Root folder untuk semua hasil. Tiap proses otomatis membuat subfolder
-          tanggal-jam di dalamnya berisi file <code>*_clean_fully.mp4</code> atau
-          <code>*_clean_partially.mp4</code> (bila invisible dilewati tanpa GPU).
-        </div>
-        <div className="row">
-          <label className="field" style={{ flex: 1 }}>
-            Root folder
-            <input
-              type="text"
-              value={outputDraft}
-              onChange={(e) => setOutputDraft(e.target.value)}
-              placeholder="/Users/nama/Videos/WatermarkRemover"
-              style={{ width: '100%' }}
-            />
-          </label>
-          {window.watermarkApp?.selectFolder && (
-            <button className="ghost" onClick={() => void handlePickFolder()}>
-              Pilih...
-            </button>
-          )}
-          <button onClick={() => void handleSaveOutputRoot()}>Simpan</button>
-        </div>
-        {outputRoot && <div className="muted">Aktif: {outputRoot}</div>}
-      </div>
+
       <div className="card">
         <h1>
           Watermark Remover{appVersion ? <span className="ver"> v{appVersion}</span> : ''}
         </h1>
-        {!hasSetup && (
-          <div className="warnbox">
-            Backend versi lama terdeteksi (tanpa auto-install). Install ulang DMG terbaru,
-            lalu pakai tombol Install Library di bawah bila error binary muncul.
-          </div>
-        )}
         <div className="muted">
           Drop banyak video sekaligus → 1 tombol hapus semua watermark (visible + invisible +
           metadata) memakai GPU lokal. Hasil tiap bulk masuk folder baru sesuai tanggal-jam upload.
           {gpu && (
             <>
               <br />
-              <span>{gpu}</span>
+              <span>GPU: {gpu}</span>
             </>
           )}
         </div>
         {gpuOk === false && (
           <div className="warnbox">
             Mode CPU: invisible watermark (pixel SynthID) <strong>dilewati otomatis</strong> karena
-            GPU NVIDIA tidak terdeteksi — hasil <strong>tidak full-clean</strong>. Visible +
-            metadata tetap dibersihkan. Tiap hasil yang tidak full bertanda peringatan kuning.
+            GPU NVIDIA tidak terdeteksi. Visible + metadata tetap dibersihkan.
           </div>
         )}
         <div
           className="dropzone"
-          style={{ outline: dragOver ? '2px dashed #2563eb' : undefined }}
+          style={{ outline: dragOver ? '2px dashed #2563eb' : undefined, opacity: ready ? 1 : 0.5 }}
           onDragOver={(e) => {
             e.preventDefault()
-            setDragOver(true)
+            if (ready) setDragOver(true)
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
             e.preventDefault()
             setDragOver(false)
-            void handleFiles(Array.from(e.dataTransfer.files))
+            if (ready) void handleFiles(Array.from(e.dataTransfer.files))
           }}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => ready && fileRef.current?.click()}
         >
           {uploadPct !== null ? (
             <span>Mengupload bulk {uploadPct}%...</span>
-          ) : (
+          ) : ready ? (
             <span>
               Tarik & letakkan video di sini, atau klik untuk pilih banyak file
               (mp4/mov/m4v/webm/mkv/avi/flv, max 500MB per file)
             </span>
+          ) : (
+            <span>Library belum siap — isi path CLI/FFmpeg di atas lalu Simpan.</span>
           )}
           <input
             ref={fileRef}
@@ -412,16 +327,7 @@ export default function App() {
         </div>
       </div>
 
-      {error && (
-        <div className="error">
-          <div>{error}</div>
-          {isBinaryError(error) && hasSetup && (
-            <div className="actions" style={{ marginTop: 10 }}>
-              <button onClick={() => void handleInstallKey('cli')}>Install Library Otomatis</button>
-            </div>
-          )}
-        </div>
-      )}
+      {error && <div className="error"><div>{error}</div></div>}
       {loading && <div className="card muted">Memuat daftar...</div>}
       {!loading && batches.length === 0 && (
         <div className="card muted">Belum ada video. Drop file di atas.</div>
@@ -436,12 +342,12 @@ export default function App() {
               <div>
                 <h2>{formatBatchName(b.batch_name)}</h2>
                 <div className="muted">
-                  Folder hasil: <code>{outputRoot ? `${outputRoot}/${b.batch_name}/` : `${b.batch_name}/`}</code> —{' '}
+                  Folder hasil: <code>{activeRoot ? `${activeRoot}/${b.batch_name}/` : `${b.batch_name}/`}</code> —{' '}
                   {done}/{b.videos.length} selesai
                 </div>
               </div>
               <div className="actions" style={{ marginTop: 0 }}>
-                <button disabled={busy} onClick={() => void handleCleanAll(b.batch_id)}>
+                <button disabled={busy || !ready} onClick={() => void handleCleanAll(b.batch_id)}>
                   {busy ? 'Diproses...' : `Hapus Watermark Semua (${b.videos.length})`}
                 </button>
                 <button
@@ -474,13 +380,6 @@ export default function App() {
                           {w}
                         </div>
                       ))}
-                      {isBinaryError(r.error) && hasSetup && (
-                        <div className="actions">
-                          <button onClick={() => void handleInstallKey('cli')}>
-                            Install Library Otomatis
-                          </button>
-                        </div>
-                      )}
                       <div className="actions">
                         <button className="ghost" disabled={vbusy} onClick={() => void handleIdentify(r.id)}>
                           Cek Sinyal

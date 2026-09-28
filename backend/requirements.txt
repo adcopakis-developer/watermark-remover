@@ -2,7 +2,5 @@ fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.18
 pydantic>=2.0
-# Binary ffmpeg bawaan (dipakai bila ffmpeg sistem tak ada di PATH).
-imageio-ffmpeg>=0.5
 # Hanya di mesin Windows build: pyinstaller (untuk watermark-server.exe)
 # pyinstaller>=6.0; sys_platform == 'win32'
