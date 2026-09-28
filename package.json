@@ -11,7 +11,8 @@
     "dev:electron": "cross-env ELEC_DEV=1 electron .",
     "dist:win": "npm run build --prefix frontend && electron-builder --win nsis --x64",
     "dist:mac": "npm run build --prefix frontend && electron-builder --mac dmg --arm64",
-    "dist:mac-intel": "npm run build --prefix frontend && electron-builder --mac dmg --x64"
+    "dist:mac-intel": "npm run build --prefix frontend && electron-builder --mac dmg --x64",
+    "release": "bash scripts/release-all.sh"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",
