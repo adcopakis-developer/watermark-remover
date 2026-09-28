@@ -31,6 +31,17 @@ Backend dev pakai `backend/.venv`; install library test:
 Tiga proses terpisah tetap bisa (3 terminal): `dev:be`, `dev:fe`,
 `dev:electron`.
 
+## Matriks OS: build di mana, jalan di mana
+
+| Target | Build di | Catatan |
+|---|---|---|
+| mac arm64 (M1-M4) | Mac arm64 (`scripts/build-mac.sh` / `npm run dist:mac`) | Backend exe PyInstaller mengikuti arch host |
+| mac Intel x64 | **Mac Intel** (`npm run dist:mac-intel`, backend via `build-mac.sh` di sana) | exe Python tidak bisa cross-build; di Mac arm64 hanya shell Electron-nya yang bisa divalidasi |
+| Windows x64 | **Mesin Windows** (`scripts\build-win.bat`) | NSIS butuh Wine bila dipaksa dari Mac; exe Python wajib dibuild di Windows. Tanpa code-sign → SmartScreen "install anyway" |
+
+Kode backend/frontend murni cross-platform (asyncio subprocess, PATH/PATHEXT,
+`os.pathsep`, winget/brew per OS) — tidak ada syscall khusus OS.
+
 ## Build installer Windows (di mesin Windows GPU, sekali jalan)
 
 ```bat
