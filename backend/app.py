@@ -152,7 +152,7 @@ async def run_cli(args: list[str], timeout: int = 3600) -> dict:
 
 
 SETUP_LOG = STORAGE / "_setup.log"
-_setup = {"installing": False}
+_setup: dict = {"installing": None}  # None | item key sedang diinstall
 
 
 def user_site_bins() -> list[str]:
@@ -252,99 +252,138 @@ def setup_append_log(text: str) -> None:
 def setup_status():
     cli = resolve_cli()
     ffmpeg = ffmpeg_exe_dir() is not None
+    pips = pip_candidates()
+    python_ok = len(pips) > 0
+    cuda = False
+    try:
+        cuda = bool(shutil.which("nvidia-smi"))
+    except Exception:
+        pass
     log = ""
     try:
         if SETUP_LOG.exists():
             log = "\n".join(SETUP_LOG.read_text().splitlines()[-30:])
     except Exception:
         pass
+    items = [
+        {
+            "key": "python",
+            "label": "Python ≥3.11 + pip",
+            "required": True,
+            "installed": python_ok,
+            "detail": f"{pips[0][0]}" if python_ok else "tidak ditemukan",
+            "installing": _setup["installing"] == "python",
+        },
+        {
+            "key": "cli",
+            "label": "remove-ai-watermarks (+ffmpeg bila perlu)",
+            "required": True,
+            "installed": bool(cli),
+            "detail": cli or "belum terinstall",
+            "installing": _setup["installing"] == "cli",
+        },
+        {
+            "key": "ffmpeg",
+            "label": "FFmpeg",
+            "required": True,
+            "installed": ffmpeg,
+            "detail": "tersedia" if ffmpeg else "belum ada",
+            "installing": _setup["installing"] == "ffmpeg",
+        },
+        {
+            "key": "cuda",
+            "label": "NVIDIA CUDA (untuk invisible)",
+            "required": False,
+            "installed": cuda,
+            "detail": "terdeteksi" if cuda else "tidak ada — fallback CPU otomatis",
+            "installing": False,
+        },
+    ]
     return {
         "ready": bool(cli and ffmpeg),
-        "cli": cli,
-        "ffmpeg": ffmpeg,
         "installing": _setup["installing"],
+        "items": items,
         "log": log,
     }
 
 
-async def do_install() -> None:
-    _setup["installing"] = True
+async def run_pip_install(packages: list[str], tag: str) -> bool:
+    """pip install --user paket; True bila sukses. Log ke SETUP_LOG."""
+    cands = await asyncio.to_thread(pip_candidates)
+    if not cands:
+        setup_append_log("ERROR: tidak ada Python 3.11+ dengan pip. Install Python dulu.")
+        return False
+    up = await asyncio.to_thread(
+        lambda: subprocess.run(cands[0] + ["install", "--upgrade", "pip"],
+                               capture_output=True, timeout=300)
+    )
+    setup_append_log(f"[{tag}] pip upgrade exit={up.returncode}")
+    cmd = cands[0] + ["install", "--user", *packages]
+    setup_append_log(f"[{tag}] RUN: {' '.join(cmd)}")
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    async for raw in proc.stdout:
+        setup_append_log(f"[{tag}] " + raw.decode(errors="replace").rstrip()[-400:])
+    await proc.wait()
+    ok = proc.returncode == 0
+    setup_append_log(f"[{tag}] {'OK' if ok else f'ERROR exit={proc.returncode}'}")
+    return ok
+
+
+async def do_install_key(key: str) -> None:
+    _setup["installing"] = key
     try:
         STORAGE.mkdir(parents=True, exist_ok=True)
-        if SETUP_LOG.exists():
-            SETUP_LOG.unlink()
-        cands = await asyncio.to_thread(pip_candidates)
-        if not cands:
-            setup_append_log(
-                "ERROR: tidak ada Python 3.11+ dengan pip di mesin ini. "
-                "Install Python 3.12+ dari python.org (centang 'Add to PATH'), "
-                "lalu klik Install lagi."
-            )
-            return
-        # Upgrade pip dulu agar tidak gagal resolve dependency modern.
-        up = await asyncio.to_thread(
-            lambda: subprocess.run(cands[0] + ["install", "--upgrade", "pip"],
-                                   capture_output=True, timeout=300)
-        )
-        setup_append_log(f"pip upgrade exit={up.returncode}")
-        extra = "remove-ai-watermarks[video,diffusion]" if sys.platform == "win32" else "remove-ai-watermarks[video]"
-        cmd = cands[0] + ["install", "--user", extra, "imageio-ffmpeg"]
-        setup_append_log("RUN: " + " ".join(cmd))
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        assert proc.stdout is not None
-        async for raw in proc.stdout:
-            setup_append_log(raw.decode(errors="replace").rstrip()[-500:])
-        await proc.wait()
-        if proc.returncode == 0:
-            setup_append_log(f"OK: instalasi selesai. CLI: {resolve_cli()}")
-        else:
-            setup_append_log(f"ERROR: pip exit={proc.returncode}")
+        if key == "cli":
+            extra = "remove-ai-watermarks[video,diffusion]" if sys.platform == "win32" else "remove-ai-watermarks[video]"
+            if await run_pip_install([extra, "imageio-ffmpeg"], "cli"):
+                setup_append_log(f"OK: CLI -> {resolve_cli()}")
+        elif key == "ffmpeg":
+            await run_pip_install(["imageio-ffmpeg"], "ffmpeg")
+        elif key == "python":
+            if sys.platform == "darwin" and shutil.which("brew"):
+                setup_append_log("[python] RUN: brew install python@3.12")
+                proc = await asyncio.create_subprocess_exec(
+                    "brew", "install", "python@3.12",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                )
+                assert proc.stdout is not None
+                async for raw in proc.stdout:
+                    setup_append_log("[python] " + raw.decode(errors="replace").rstrip()[-400:])
+                await proc.wait()
+                setup_append_log(f"[python] exit={proc.returncode}")
+            elif sys.platform == "win32" and shutil.which("winget"):
+                setup_append_log("[python] RUN: winget install Python.3.12")
+                proc = await asyncio.create_subprocess_exec(
+                    "winget", "install", "-e", "--id", "Python.3.12",
+                    "--accept-package-agreements", "--accept-source-agreements",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                )
+                assert proc.stdout is not None
+                async for raw in proc.stdout:
+                    setup_append_log("[python] " + raw.decode(errors="replace").rstrip()[-400:])
+                await proc.wait()
+                setup_append_log(f"[python] exit={proc.returncode}")
+            else:
+                setup_append_log("ERROR: install Python otomatis tidak didukung di sini. "
+                                 "Download manual: https://www.python.org/downloads/")
     except Exception as e:  # noqa: BLE001
         setup_append_log(f"ERROR: {e}")
     finally:
-        _setup["installing"] = False
+        _setup["installing"] = None
 
 
-@app.post("/api/setup/install")
-async def setup_install(bg: BackgroundTasks):
+@app.post("/api/setup/install/{key}")
+async def setup_install_key(key: str, bg: BackgroundTasks):
+    if key not in ("python", "cli", "ffmpeg"):
+        raise HTTPException(400, "key harus python|cli|ffmpeg")
     if _setup["installing"]:
-        return {"installing": True}
-    st = setup_status()
-    if st["ready"]:
-        return {"installing": False, "ready": True}
-    bg.add_task(do_install)
-    _setup["installing"] = True
-    return {"installing": True}
-    binary = resolve_cli() or RAIW_BIN
-    env = None
-    ffmpeg_dir = ffmpeg_exe_dir()
-    if ffmpeg_dir:
-        env = {**os.environ, "PATH": f"{ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            binary,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-    except FileNotFoundError:
-        return {"code": 127, "stdout": "", "stderr": "binary tidak ditemukan", "timed_out": False}
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
-        return {
-            "code": proc.returncode or 0,
-            "stdout": out.decode(errors="replace")[-8000:],
-            "stderr": err.decode(errors="replace")[-8000:],
-            "timed_out": False,
-        }
-    except asyncio.TimeoutError:
-        proc.kill()
-        return {"code": 1, "stdout": "", "stderr": "timeout", "timed_out": True}
+        return {"installing": _setup["installing"]}
+    bg.add_task(do_install_key, key)
+    _setup["installing"] = key
+    return {"installing": key}
 
 
 @app.get("/api/videos")

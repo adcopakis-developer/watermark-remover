@@ -47,11 +47,19 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T
 }
 
+export interface SetupItem {
+  key: string
+  label: string
+  required: boolean
+  installed: boolean
+  detail: string
+  installing: boolean
+}
+
 export interface SetupStatus {
   ready: boolean
-  cli: string | null
-  ffmpeg: boolean
-  installing: boolean
+  installing: string | null
+  items: SetupItem[]
   log: string
 }
 
@@ -59,8 +67,8 @@ export const api = {
   meta: () => req<{ version: string; has_setup: boolean }>('/api/meta'),
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
   setup: () => req<SetupStatus>('/api/setup/status'),
-  install: () =>
-    req<{ installing: boolean; ready?: boolean }>('/api/setup/install', { method: 'POST' }),
+  installKey: (key: string) =>
+    req<{ installing: string | null }>(`/api/setup/install/${key}`, { method: 'POST' }),
   batches: () => req<{ data: VwBatch[] }>('/api/batches').then((r) => r.data),
 
   uploadBatch: (files: File[], onProgress?: (pct: number) => void): Promise<VwBatch> => {

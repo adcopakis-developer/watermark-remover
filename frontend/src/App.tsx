@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { VwBatch, VwRecord } from './api'
+import type { VwBatch, VwRecord, SetupItem } from './api'
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
@@ -31,9 +31,9 @@ export default function App() {
   const [gpu, setGpu] = useState<string | null>(null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [hasSetup, setHasSetup] = useState(true)
-  const [setupReady, setSetupReady] = useState<boolean | null>(null)
+  const [setupItems, setSetupItems] = useState<SetupItem[]>([])
   const [setupLog, setSetupLog] = useState('')
-  const [setupDismissed, setSetupDismissed] = useState(false)
+  const [setupLogOpen, setSetupLogOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -68,33 +68,37 @@ export default function App() {
     void api
       .setup()
       .then((s) => {
-        setSetupReady(s.ready)
+        setSetupItems(s.items)
         setSetupLog(s.log)
       })
-      .catch(() => setSetupReady(true))
+      .catch(() => setSetupItems([]))
   }, [refresh])
 
+  const setupBusy = setupItems.some((i) => i.installing)
+
   useEffect(() => {
-    if (setupReady !== false) return
+    if (setupItems.length === 0 && !setupBusy) return
+    if (!setupItems.some((i) => !i.installed || i.installing)) return
     const t = window.setInterval(() => {
       void api
         .setup()
         .then((s) => {
-          setSetupReady(s.ready)
+          setSetupItems(s.items)
           setSetupLog(s.log)
         })
         .catch(() => {})
     }, 3000)
     return () => window.clearInterval(t)
-  }, [setupReady])
+  }, [setupItems, setupBusy])
 
-  const handleInstall = useCallback(async () => {
+  const handleInstallKey = useCallback(async (key: string) => {
     setError(null)
     try {
-      await api.install()
+      await api.installKey(key)
       const s = await api.setup()
-      setSetupReady(s.ready)
+      setSetupItems(s.items)
       setSetupLog(s.log)
+      setSetupLogOpen(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal memulai instalasi')
     }
@@ -204,25 +208,43 @@ export default function App() {
 
   return (
     <div className="wrap">
-      {setupReady === false && !setupDismissed && (
-        <div className="modal-backdrop">
-          <div className="card modal">
-            <h2>Library pendukung belum terinstall</h2>
-            <p className="muted">
-              Untuk menghapus watermark, app perlu menginstall otomatis
-              <code>remove-ai-watermarks</code> + <code>ffmpeg</code> (sekali saja,
-              ±500MB–2GB tergantung GPU). Setuju install sekarang?
-            </p>
-            <div className="actions">
-              <button onClick={() => void handleInstall()}>Ya, Install Otomatis</button>
-              <button className="ghost" onClick={() => setSetupDismissed(true)}>
-                Nanti Saja
-              </button>
+      <div className="card">
+        <h2>Library Pendukung</h2>
+        {setupItems.length === 0 && (
+          <div className="muted">Memeriksa OS dan library...</div>
+        )}
+        {setupItems.map((item) => (
+          <div className="setup-row" key={item.key}>
+            <span
+              className="dot"
+              style={{ background: item.installed ? '#22c55e' : '#f59e0b' }}
+            />
+            <div className="setup-info">
+              <div>
+                {item.label}
+                {!item.required && <span className="muted"> (opsional)</span>}
+              </div>
+              <div className="muted">{item.installing ? 'Menginstall...' : item.detail}</div>
             </div>
-            {setupLog && <pre>{setupLog}</pre>}
+            {!item.installed && item.key !== 'cuda' && (
+              <button
+                disabled={item.installing || setupBusy}
+                onClick={() => void handleInstallKey(item.key)}
+              >
+                {item.installing ? 'Installing...' : 'Install'}
+              </button>
+            )}
           </div>
-        </div>
-      )}
+        ))}
+        {setupLog && (
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button className="ghost" onClick={() => setSetupLogOpen(!setupLogOpen)}>
+              {setupLogOpen ? 'Tutup Log' : 'Lihat Log Install'}
+            </button>
+          </div>
+        )}
+        {setupLogOpen && setupLog && <pre>{setupLog}</pre>}
+      </div>
       <div className="card">
         <h1>
           Watermark Remover{appVersion ? <span className="ver"> v{appVersion}</span> : ''}
@@ -287,7 +309,7 @@ export default function App() {
           <div>{error}</div>
           {isBinaryError(error) && hasSetup && (
             <div className="actions" style={{ marginTop: 10 }}>
-              <button onClick={() => void handleInstall()}>Install Library Otomatis</button>
+              <button onClick={() => void handleInstallKey('cli')}>Install Library Otomatis</button>
             </div>
           )}
         </div>
@@ -340,7 +362,7 @@ export default function App() {
                       {r.error && <div style={{ color: '#f87171', marginTop: 6 }}>{r.error}</div>}
                       {isBinaryError(r.error) && hasSetup && (
                         <div className="actions">
-                          <button onClick={() => void handleInstall()}>
+                          <button onClick={() => void handleInstallKey('cli')}>
                             Install Library Otomatis
                           </button>
                         </div>
