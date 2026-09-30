@@ -1,8 +1,10 @@
 # watermark-remover (dev mode, 1 halaman, tanpa login)
 
-Upload video → satu tombol **Hapus Watermark** → full-clean
+Upload video/gambar → satu tombol **Hapus Watermark** → full-clean
 (visible + invisible + metadata) via `remove-ai-watermarks` memakai
 GPU/VGA lokal. Tanpa opsi mode.
+
+Format: video (mp4/mov/m4v/webm/mkv/avi/flv) + gambar (png/jpg/jpeg/webp/bmp/tif/tiff/gif).
 
 ## Syarat
 

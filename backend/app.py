@@ -1,4 +1,4 @@
-"""Standalone backend: upload video + hapus watermark via CLI remove-ai-watermarks.
+"""Standalone backend: upload video/gambar + hapus watermark via CLI remove-ai-watermarks.
 
 Jalan di mesin lokal. Frontend Vite memanggil /api/*.
 Require: `remove-ai-watermarks` (pip) + `ffmpeg` di PATH, atau path manual
@@ -28,7 +28,9 @@ STORE_FILE = STORAGE / "_store.json"
 SETTINGS_FILE = STORAGE / "_settings.json"
 WIB = timezone(timedelta(hours=7))
 
-ALLOWED_EXT = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"}
+ALLOWED_EXT = IMAGE_EXT | VIDEO_EXT
 MAX_BYTES = 500 * 1024 * 1024
 APP_VERSION = "1.1.0"
 
@@ -266,7 +268,7 @@ def list_videos():
 def get_video(vid: str):
     rec = find_rec(load_store(), vid)
     if not rec:
-        raise HTTPException(404, "Video tidak ditemukan")
+        raise HTTPException(404, "File tidak ditemukan")
     return {"data": rec}
 
 
@@ -385,9 +387,11 @@ async def identify_video(vid: str):
     rows = load_store()
     rec = find_rec(rows, vid)
     if not rec:
-        raise HTTPException(404, "Video tidak ditemukan")
+        raise HTTPException(404, "File tidak ditemukan")
     src = STORAGE / rec["src_file"]
-    res = await run_cli(["video", "identify", str(src)])
+    is_img = Path(rec["src_file"]).suffix.lower() in IMAGE_EXT
+    args = ["identify", str(src)] if is_img else ["video", "identify", str(src)]
+    res = await run_cli(args)
     head = "TIMEOUT" if res["timed_out"] else f"exit={res['code']}"
     rec["report"] = f"[identify] {head}\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000]
     rec["error"] = None if res["code"] == 0 else (res["stderr"] or res["stdout"])[-500:]
@@ -397,10 +401,12 @@ async def identify_video(vid: str):
 
 
 def build_args(mode: str, mark: str, src: str, out: str) -> list[str]:
-    # Selalu full-clean: visible + invisible + metadata.
-    # --invisible (profil VAE CUDA) hanya didukung MP4/MOV/M4V;
-    # format lain otomatis fallback ke `video all` tanpa invisible.
+    # Image: `all` sudah pipeline penuh (visible + invisible + metadata),
+    # tanpa flag --invisible/--mark. Video: `video all` + --invisible
+    # (profil VAE CUDA) bila kontainer didukung.
     ext = Path(src).suffix.lower()
+    if ext in IMAGE_EXT:
+        return ["all", src, "-o", out]
     if ext in (".mp4", ".mov", ".m4v"):
         args = ["video", "all", src, "-o", out, "--invisible"]
     else:
@@ -408,6 +414,12 @@ def build_args(mode: str, mark: str, src: str, out: str) -> list[str]:
     if mark != "auto":
         args += ["--mark", mark]
     return args
+
+
+def invisible_skipped(res: dict) -> bool:
+    """True bila CLI melaporkan step invisible di-skip (tanpa GPU)."""
+    low = ((res.get("stdout") or "") + "\n" + (res.get("stderr") or "")).lower()
+    return ("not removed" in low and "invisible" in low) or ("step 2 was skipped" in low)
 
 
 INVISIBLE_WARN = (
@@ -428,23 +440,33 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
         ext = Path(rec["src_file"]).suffix.lower() or ".mp4"
         out = workdir / f"clean{ext}"
         warnings: list[str] = []
-        cuda = await asyncio.to_thread(has_cuda_sync)
-        if cuda:
+        is_img = ext in IMAGE_EXT
+        if is_img:
+            # `all` menangani seluruh pipeline; exit 1 hanya berarti step
+            # invisible di-skip tanpa GPU (output tetap valid).
             res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
-            err_low = (res["stderr"] or "").lower()
-            if res["code"] != 0 and ("cuda" in err_low or "diffusion" in err_low):
-                res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
-                warnings.append(INVISIBLE_WARN + " (extra diffusion tidak terinstall)")
-        else:
-            res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
-            if ext in (".mp4", ".mov", ".m4v"):
+            if invisible_skipped(res):
                 warnings.append(INVISIBLE_WARN)
+        else:
+            cuda = await asyncio.to_thread(has_cuda_sync)
+            if cuda:
+                res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
+                err_low = (res["stderr"] or "").lower()
+                if res["code"] != 0 and ("cuda" in err_low or "diffusion" in err_low):
+                    res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
+                    warnings.append(INVISIBLE_WARN + " (extra diffusion tidak terinstall)")
+            else:
+                res = await run_cli(["video", "all", str(src), "-o", str(out)], timeout=5400)
+                if ext in (".mp4", ".mov", ".m4v"):
+                    warnings.append(INVISIBLE_WARN)
         note = f" [{'; '.join(warnings)}]" if warnings else ""
         rows = load_store()
         rec = find_rec(rows, vid)
         if not rec:
             return
-        if res["timed_out"] or res["code"] != 0 or not out.exists():
+        # Sukses = output ada & non-kosong (CLI image exit 1 saat skip invisible).
+        ok = (not res["timed_out"]) and out.exists() and out.stat().st_size > 0
+        if not ok:
             rec.update(
                 status="failed",
                 warnings=warnings,
@@ -472,7 +494,7 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
                 out_file=str(dest),
                 out_folder=str(out_dir),
                 warnings=warnings,
-                report=f"[{mode}]{note} exit=0\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
+                report=f"[{mode}]{note} exit={res['code']}\nOUT:\n{res['stdout']}\nERR:\n{res['stderr']}"[:8000],
                 error=None,
                 updated_at=now_wib(),
             )
@@ -494,7 +516,7 @@ async def clean_video(vid: str, body: dict, bg: BackgroundTasks):
     rows = load_store()
     rec = find_rec(rows, vid)
     if not rec:
-        raise HTTPException(404, "Video tidak ditemukan")
+        raise HTTPException(404, "File tidak ditemukan")
     if rec["status"] == "processing":
         raise HTTPException(400, "Masih diproses, tunggu selesai.")
     rec.update(mode="all", mark="auto", status="processing",
@@ -566,7 +588,7 @@ def delete_batch(batch_id: str):
 def download_video(vid: str, kind: str = "clean"):
     rec = find_rec(load_store(), vid)
     if not rec:
-        raise HTTPException(404, "Video tidak ditemukan")
+        raise HTTPException(404, "File tidak ditemukan")
     name = rec["out_file"] if kind == "clean" else rec["src_file"]
     if kind == "clean" and not name:
         raise HTTPException(404, "Belum ada hasil.")
@@ -581,7 +603,7 @@ def delete_video(vid: str):
     rows = load_store()
     rec = find_rec(rows, vid)
     if not rec:
-        raise HTTPException(404, "Video tidak ditemukan")
+        raise HTTPException(404, "File tidak ditemukan")
     if rec.get("src_file"):
         try:
             safe_join(rec["src_file"]).unlink(missing_ok=True)

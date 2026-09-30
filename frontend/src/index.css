@@ -301,6 +301,15 @@ video {
   display: block;
 }
 
+.preview {
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #000;
+  border-radius: 8px 8px 0 0;
+  display: block;
+}
+
 .meta {
   padding: 12px 14px;
   font-size: 12px;

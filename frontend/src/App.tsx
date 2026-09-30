@@ -16,6 +16,12 @@ function formatBatchName(name: string): string {
   return `Bulk ${m[3]}-${m[2]}-${m[1]} ${m[4]}:${m[5]}:${m[6]}`
 }
 
+const IMAGE_RE = /\.(png|jpe?g|webp|bmp|tiff?|gif)$/i
+
+function isImageName(name: string): boolean {
+  return IMAGE_RE.test(name)
+}
+
 // Contoh lokasi install per OS untuk placeholder input path.
 const CLI_PLACEHOLDER: Record<GuideOS, string> = {
   mac: '/Users/nama/Library/Python/3.12/bin/remove-ai-watermarks',
@@ -106,9 +112,14 @@ export default function App() {
   }, [batches, anyProcessing])
 
   const handleFiles = useCallback(async (files: File[]) => {
-    const vids = files.filter((f) => f.type.startsWith('video/') || /\.(mp4|mov|m4v|webm|mkv|avi|flv)$/i.test(f.name))
+    const vids = files.filter(
+      (f) =>
+        f.type.startsWith('video/') ||
+        f.type.startsWith('image/') ||
+        /\.(mp4|mov|m4v|webm|mkv|avi|flv|png|jpe?g|webp|bmp|tiff?|gif)$/i.test(f.name),
+    )
     if (vids.length === 0) {
-      setError('Pilih file video (bisa banyak sekaligus)')
+      setError('Pilih file video atau gambar (bisa banyak sekaligus)')
       return
     }
     setError(null)
@@ -164,7 +175,7 @@ export default function App() {
   )
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!window.confirm('Hapus video ini dari storage?')) return
+    if (!window.confirm('Hapus berkas ini dari storage?')) return
     setBusyId(id)
     try {
       await api.remove(id)
@@ -276,8 +287,9 @@ export default function App() {
           Watermark Remover{appVersion ? <span className="ver"> v{appVersion}</span> : ''}
         </h1>
         <div className="muted">
-          Drop banyak video sekaligus → 1 tombol hapus semua watermark (visible + invisible +
-          metadata) memakai GPU lokal. Hasil tiap bulk masuk folder baru sesuai tanggal-jam upload.
+          Drop banyak video atau gambar sekaligus → 1 tombol hapus semua watermark (visible +
+          invisible + metadata) memakai GPU lokal. Hasil tiap bulk masuk folder baru sesuai
+          tanggal-jam upload.
           {gpu && (
             <>
               <br />
@@ -310,8 +322,8 @@ export default function App() {
             <span>Mengupload bulk {uploadPct}%...</span>
           ) : ready ? (
             <span>
-              Tarik & letakkan video di sini, atau klik untuk pilih banyak file
-              (mp4/mov/m4v/webm/mkv/avi/flv, max 500MB per file)
+              Tarik & letakkan video atau gambar di sini, atau klik untuk pilih banyak file
+              (mp4/mov/webm/mkv/avi + png/jpg/webp, max 500MB per file)
             </span>
           ) : (
             <span>Library belum siap — isi path CLI/FFmpeg di atas lalu Simpan.</span>
@@ -320,7 +332,7 @@ export default function App() {
             ref={fileRef}
             type="file"
             multiple
-            accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/x-flv,.mp4,.mov,.m4v,.webm,.mkv,.avi,.flv"
+            accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/x-flv,image/png,image/jpeg,image/webp,image/bmp,image/tiff,image/gif,.mp4,.mov,.m4v,.webm,.mkv,.avi,.flv,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif"
             style={{ display: 'none' }}
             onChange={(e) => void handleFiles(Array.from(e.target.files ?? []))}
           />
@@ -335,7 +347,7 @@ export default function App() {
       {error && <div className="error"><div>{error}</div></div>}
       {loading && <div className="card muted">Memuat daftar...</div>}
       {!loading && batches.length === 0 && (
-        <div className="card muted">Belum ada video. Drop file di atas.</div>
+        <div className="card muted">Belum ada berkas. Drop file di atas.</div>
       )}
 
       {batches.map((b) => {
@@ -369,11 +381,20 @@ export default function App() {
                 const vbusy = busyId === r.id || r.status === 'processing'
                 return (
                   <div className="card inner" key={r.id}>
-                    <video
-                      src={r.out_file ? api.downloadUrl(r.id, 'clean') : api.downloadUrl(r.id, 'src')}
-                      controls
-                      preload="metadata"
-                    />
+                    {isImageName(r.src_file) ? (
+                      <img
+                        className="preview"
+                        src={r.out_file ? api.downloadUrl(r.id, 'clean') : api.downloadUrl(r.id, 'src')}
+                        alt={r.src_file}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <video
+                        src={r.out_file ? api.downloadUrl(r.id, 'clean') : api.downloadUrl(r.id, 'src')}
+                        controls
+                        preload="metadata"
+                      />
+                    )}
                     <div className="meta">
                       <div className="name">{r.src_file}</div>
                       <div className="muted">

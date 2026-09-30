@@ -63,10 +63,17 @@ export function ensureBackend() {
 function main() {
   const py = ensureBackend();
   const port = process.env.BACKEND_PORT || '8000';
+  // Suntik folder Scripts/bin venv ke PATH agar CLI (remove-ai-watermarks)
+  // yang di-pip ke venv langsung terdeteksi backend.
+  const venvBin = path.dirname(py);
+  const env = {
+    ...process.env,
+    PATH: `${venvBin}${path.delimiter}${process.env.PATH || ''}`,
+  };
   const child = spawn(
     py,
     ['-m', 'uvicorn', 'app:app', '--app-dir', 'backend', '--host', '127.0.0.1', '--port', port],
-    { stdio: 'inherit', cwd: root },
+    { stdio: 'inherit', cwd: root, env },
   );
   child.on('exit', (code) => process.exit(code ?? 1));
 }

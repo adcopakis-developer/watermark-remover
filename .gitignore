@@ -7,3 +7,5 @@ storage/
 *.log
 .DS_Store
 *.tsbuildinfo
+# pnpm kanonik: lockfile npm lokal diabaikan (pnpm-lock.yaml yang dilacak)
+package-lock.json
