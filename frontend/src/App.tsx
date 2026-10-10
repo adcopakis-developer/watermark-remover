@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { VwBatch, VwRecord, VwSettings, VwSetup } from './api'
+import type { VwBatch, VwCapability, VwRecord, VwSettings, VwSetup } from './api'
 import InstallGuide, { detectOS, type GuideOS } from './InstallGuide'
 
 function formatBytes(bytes: number): string {
@@ -50,6 +50,7 @@ export default function App() {
   const [settings, setSettings] = useState<VwSettings | null>(null)
   const [draft, setDraft] = useState<VwSettings | null>(null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
+  const [capability, setCapability] = useState<VwCapability | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -58,6 +59,7 @@ export default function App() {
     setError(null)
     try {
       setBatches(await api.batches())
+      void api.capability(true).then(setCapability).catch(() => {})
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal memuat daftar')
     } finally {
@@ -72,7 +74,6 @@ export default function App() {
       setGpuOk(g.cuda)
       setGpu(g.detail)
     }).catch(() => setGpu('Status GPU tidak diketahui'))
-    void api.setup().then(setSetup).catch(() => setSetup(null))
     void api.settings().then((s) => {
       setSettings(s)
       setDraft(s)
@@ -87,6 +88,7 @@ export default function App() {
       setDraft(s)
       const sr = await api.setup()
       setSetup(sr)
+      void api.capability(true).then(setCapability).catch(() => {})
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal menyimpan')
@@ -228,6 +230,19 @@ export default function App() {
               <td>
                 <span className={`dot ${setup?.ffmpeg.installed ? 'ok' : 'no'}`} />
                 <span className="path">{setup?.ffmpeg.path || 'tidak ditemukan'}</span>
+              </td>
+            </tr>
+            <tr>
+              <td>Full-clean (invisible)</td>
+              <td>
+                <span className={`dot ${capability?.full_clean ? 'ok' : 'no'}`} />
+                <span className="path">
+                  {capability
+                    ? capability.full_clean
+                      ? 'Siap — invisible (SynthID) ikut dihapus'
+                      : capability.notes.join(' ') || 'Belum siap'
+                    : 'memeriksa…'}
+                </span>
               </td>
             </tr>
           </tbody>

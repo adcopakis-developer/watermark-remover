@@ -71,10 +71,13 @@ function main() {
       : 'export PATH="$HOME/.local/bin:$PATH"';
     console.log(`  Opsi 2 — daftarkan ke PATH (PowerShell/terminal), tutup-buka terminal:\n  ${fix}`);
   } else {
-    const cmd = isWin
-      ? 'py -3.12 -m pip install --user "remove-ai-watermarks[video,diffusion]"'
-      : 'python3 -m pip install --user "remove-ai-watermarks[video]"';
-    console.log(`[setup] remove-ai-watermarks: BELUM ADA — jalankan:\n  ${cmd}`);
+    const py3 = isWin ? 'py -3.12' : 'python3';
+    console.log(
+      '[setup] remove-ai-watermarks: BELUM ADA — jalankan:\n' +
+        `  ${py3} -m pip install --user "remove-ai-watermarks[video,qwen-zimage]"\n` +
+        '  [video] = visible+metadata+video; [qwen-zimage] = invisible (SynthID) di GPU NVIDIA.\n' +
+        '  Tanpa GPU NVIDIA, pasang [video] saja — step invisible otomatis dilewati.',
+    );
   }
 
   console.log(`[setup] selesai (python: ${py}). jalan: npm run dev`);

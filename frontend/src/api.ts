@@ -41,6 +41,13 @@ export interface VwSetup {
   ffmpeg: { installed: boolean; path: string }
 }
 
+export interface VwCapability {
+  cuda: boolean
+  invisible_deps: boolean
+  full_clean: boolean
+  notes: string[]
+}
+
 // Dev mode: selalu via proxy vite '/api' -> backend :8000.
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -61,6 +68,8 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   meta: () => req<{ version: string; has_setup: boolean }>('/api/meta'),
   gpu: () => req<{ cuda: boolean; detail: string }>('/api/gpu'),
+  capability: (refresh?: boolean) =>
+    req<VwCapability>(`/api/capability${refresh ? '?refresh=1' : ''}`),
   setup: () => req<VwSetup>('/api/setup/status'),
   settings: () => req<VwSettings>('/api/settings'),
   saveSettings: (body: VwSettings) =>

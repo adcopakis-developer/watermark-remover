@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -227,6 +228,124 @@ async def gpu_status():
     return {"cuda": False, "detail": "GPU tidak terdeteksi"}
 
 
+# ── Autodeteksi kemampuan full-clean (invisible) ─────────────────────────
+# Engine invisible (SynthID) butuh CUDA + extra `qwen-zimage`
+# (torch+diffusers+diffsynth). Keduanya diperiksa pada interpreter yang
+# menjalankan CLI (bukan backend) supaya akurat lintas platform.
+_CLI_PROBE = (
+    "import importlib.util as u\n"
+    "s = u.find_spec('remove_ai_watermarks')\n"
+    "print('1' if s is not None and s.loader is not None else '0')\n"
+)
+
+_STACK_PROBE = "\n".join([
+    "import importlib.util as u, json",
+    "def has(m):",
+    "    try:",
+    "        s = u.find_spec(m)",
+    "    except Exception:",
+    "        s = None",
+    "    return s is not None and s.loader is not None",
+    "deps = all(has(m) for m in ('torch', 'diffusers', 'diffsynth'))",
+    "cuda = False",
+    "if deps:",
+    "    try:",
+    "        import torch",
+    "        cuda = bool(torch.cuda.is_available())",
+    "    except Exception:",
+    "        cuda = False",
+    "print(json.dumps({'deps': deps, 'cuda': cuda}))",
+])
+
+
+def _candidate_interpreters() -> list[list[str]]:
+    """Interpreter yang mungkin menjalankan CLI: venv backend dulu, lalu python
+    di PATH (Windows: py -3.x)."""
+    cands: list[list[str]] = []
+    if sys.executable:
+        cands.append([sys.executable])
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            cands.append([found])
+    if os.name == "nt":
+        py = shutil.which("py")
+        if py:
+            for ver in ("3.12", "3.13", "3.11"):
+                cands.append([py, "-" + ver])
+    return cands
+
+
+def _probe_capability() -> dict:
+    """Cek deps + cuda pada interpreter yang punya remove_ai_watermarks."""
+    for args in _candidate_interpreters():
+        try:
+            which = subprocess.run(
+                args + ["-c", _CLI_PROBE], capture_output=True, text=True, timeout=60
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if which.returncode != 0 or which.stdout.strip() != "1":
+            continue
+        try:
+            r = subprocess.run(
+                args + ["-c", _STACK_PROBE],
+                capture_output=True, text=True, timeout=180,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode != 0:
+            continue
+        try:
+            return json.loads(r.stdout.strip().splitlines()[-1])
+        except (ValueError, AttributeError):
+            continue
+    return {"deps": False, "cuda": False}
+
+
+_capability_cache: Optional[dict] = None
+
+
+def get_capability(force: bool = False) -> dict:
+    """Autodeteksi: apakah full-clean (invisible) bisa dijalankan di mesin ini."""
+    global _capability_cache
+    if _capability_cache is None or force:
+        probed = _probe_capability()
+        deps = bool(probed.get("deps"))
+        cuda = bool(probed.get("cuda")) or has_cuda_sync()
+        notes = []
+        if not cuda:
+            notes.append("GPU NVIDIA/CUDA tidak terdeteksi — invisible watermark dilewati.")
+        if not deps:
+            notes.append(
+                "Extra qwen-zimage belum terinstall — jalankan: "
+                'pip install "remove-ai-watermarks[video,qwen-zimage]".'
+            )
+        _capability_cache = {
+            "cuda": cuda,
+            "invisible_deps": deps,
+            "full_clean": cuda and deps,
+            "notes": notes,
+        }
+    return _capability_cache
+
+
+@app.get("/api/capability")
+def capability(refresh: bool = False):
+    # refresh=1 dipakai tombol Refresh di UI setelah user pasang extra,
+    # supaya hasil autodeteksi tidak basi.
+    return get_capability(force=refresh)
+
+
+@asynccontextmanager
+async def _lifespan(_):
+    asyncio.to_thread(get_capability)
+    yield
+
+
+app.router.lifespan_context = _lifespan
+
+
 async def run_cli(args: list[str], timeout: int = 3600) -> dict:
     binary = resolve_cli_path()
     if not binary:
@@ -400,13 +519,17 @@ async def identify_video(vid: str):
     return {"data": rec}
 
 
-def build_args(mode: str, mark: str, src: str, out: str) -> list[str]:
-    # Image: `all` sudah pipeline penuh (visible + invisible + metadata),
-    # tanpa flag --invisible/--mark. Video: `video all` + --invisible
-    # (profil VAE CUDA) bila kontainer didukung.
+def build_args(mode: str, mark: str, src: str, out: str, *, force_invisible: bool = False) -> list[str]:
+    # Image: `all` = pipeline penuh (visible + invisible + metadata). Tanpa
+    # --force, step invisible di-skip diam-diam saat tak ada sinyal lokal;
+    # --force menjalankannya (butuh extra qwen-zimage + CUDA). Video:
+    # `video all` + --invisible (profil VAE CUDA) bila kontainer didukung.
     ext = Path(src).suffix.lower()
     if ext in IMAGE_EXT:
-        return ["all", src, "-o", out]
+        args = ["all", src, "-o", out]
+        if force_invisible:
+            args.append("--force")
+        return args
     if ext in (".mp4", ".mov", ".m4v"):
         args = ["video", "all", src, "-o", out, "--invisible"]
     else:
@@ -416,16 +539,37 @@ def build_args(mode: str, mark: str, src: str, out: str) -> list[str]:
     return args
 
 
-def invisible_skipped(res: dict) -> bool:
-    """True bila CLI melaporkan step invisible di-skip (tanpa GPU)."""
+def invisible_skip_reason(res: dict) -> Optional[str]:
+    """Kenapa step invisible di-skip, atau None bila scrub jalan/berhasil.
+    "deps" = extra qwen-zimage belum diinstall; "skipped" = di-skip karena
+    tak ada sinyal lokal / GPU tidak jalan."""
     low = ((res.get("stdout") or "") + "\n" + (res.get("stderr") or "")).lower()
-    return ("not removed" in low and "invisible" in low) or ("step 2 was skipped" in low)
+    if "gpu dependencies not installed" in low:
+        return "deps"
+    if (
+        "no invisible ai watermark detected" in low
+        or "step 2 was skipped" in low
+        or ("not removed" in low and "invisible" in low)
+    ):
+        return "skipped"
+    return None
+
+
+def gpu_runtime_error(res: dict) -> bool:
+    """Engine invisible gagal karena tak ada CUDA/diffusion, bukan error lain."""
+    low = ((res.get("stderr") or "") + (res.get("stdout") or "")).lower()
+    return "cuda" in low or "diffusion" in low
 
 
 INVISIBLE_WARN = (
     "Tidak full-clean: invisible watermark (pixel SynthID) DILEWATI "
     "karena GPU NVIDIA/CUDA tidak terdeteksi. "
     "Visible + metadata tetap dibersihkan."
+)
+INVISIBLE_DEPS_WARN = (
+    "Tidak full-clean: invisible watermark (pixel SynthID) DILEWATI karena "
+    "extra GPU belum diinstall. Jalankan: pip install "
+    '"remove-ai-watermarks[qwen-zimage]" lalu ulangi (butuh GPU NVIDIA/CUDA).'
 )
 
 
@@ -442,13 +586,26 @@ async def run_clean(vid: str, mode: str, mark: str) -> None:
         warnings: list[str] = []
         is_img = ext in IMAGE_EXT
         if is_img:
-            # `all` menangani seluruh pipeline; exit 1 hanya berarti step
-            # invisible di-skip tanpa GPU (output tetap valid).
-            res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
-            if invisible_skipped(res):
+            # Tanpa --force, `all` men-skip step invisible diam-diam saat tak ada
+            # sinyal lokal. Paksa scrub saat GPU terdeteksi; bila engine tetap
+            # gagal (mis. torch CPU), ulangi tanpa scrub agar visible+metadata
+            # tetap keluar. Exit 1 dengan output ada = step invisible di-skip.
+            if get_capability()["cuda"]:
+                res = await run_cli(
+                    build_args(mode, mark, str(src), str(out), force_invisible=True),
+                    timeout=5400,
+                )
+                if res["code"] != 0 and not out.exists() and gpu_runtime_error(res):
+                    res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
+            else:
+                res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
+            reason = invisible_skip_reason(res)
+            if reason == "deps":
+                warnings.append(INVISIBLE_DEPS_WARN)
+            elif reason == "skipped":
                 warnings.append(INVISIBLE_WARN)
         else:
-            cuda = await asyncio.to_thread(has_cuda_sync)
+            cuda = get_capability()["cuda"]
             if cuda:
                 res = await run_cli(build_args(mode, mark, str(src), str(out)), timeout=5400)
                 err_low = (res["stderr"] or "").lower()

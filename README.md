@@ -12,7 +12,7 @@ Format: video (mp4/mov/m4v/webm/mkv/avi/flv) + gambar (png/jpg/jpeg/webp/bmp/tif
 - `ffmpeg` di PATH
 - NVIDIA driver + CUDA (opsional, untuk invisible watermark; tanpa GPU otomatis fallback CPU)
 - `pip install -r backend/requirements.txt`
-- `pip install "remove-ai-watermarks[video]"` (tambah `[video,diffusion]` bila ada GPU NVIDIA)
+- `pip install "remove-ai-watermarks[video,qwen-zimage]"` — `[video]` = visible+metadata+video, `[qwen-zimage]` = invisible (SynthID) di GPU NVIDIA. Tanpa GPU NVIDIA pakai `[video]` saja (step invisible otomatis dilewati).
 
 ## Jalan (sekali perintah)
 
@@ -22,7 +22,7 @@ npm i
 
 # sekali saja: venv backend + cek ffmpeg/CLI (dev juga bootstrap otomatis bila lupa)
 npm run setup
-# bila remove-ai-watermarks belum ada, di venv: pip install "remove-ai-watermarks[video]"
+# bila remove-ai-watermarks belum ada, di venv: pip install "remove-ai-watermarks[video,qwen-zimage]"
 
 # tiap hari: backend :8000 + frontend :5173 (tanpa aktivasi venv manual)
 npm run dev
